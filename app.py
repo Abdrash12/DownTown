@@ -9,7 +9,6 @@ app = Flask(__name__, template_folder='templates', static_folder='static')
 # ==========================================
 # 1. HARDENED CONFIGURATION & REDIS OPTIMIZATION
 # ==========================================
-# Grabs variables cleanly from the Render environment dashboard
 REDIS_URL = os.environ.get('REDIS_URL')
 PROXY_URL = os.environ.get('PROXY_URL')  # Format: http://username:password@ip:port
 
@@ -54,16 +53,26 @@ def process_download(self, url, format_id, title):
         if d['status'] == 'downloading':
             total_bytes = d.get('total_bytes') or d.get('total_bytes_estimate') or 0
             downloaded = d.get('downloaded_bytes', 0)
-            percent = int((downloaded / total_bytes) * 100) if total_bytes > 0 else 0
+            
+            # Calculate MB downloaded for chunked streams where total size is hidden by CDN
+            mb_downloaded = round(downloaded / (1024 * 1024), 1)
+            
+            if total_bytes > 0:
+                percent = int((downloaded / total_bytes) * 100)
+                status_text = f"DOWNLOADING: {percent}% ({mb_downloaded} MB)"
+            else:
+                # If YouTube hides total bytes, report progressive MB instead of stalling at 0%
+                percent = -1  # Special flag for frontend to show an indeterminate spinner
+                status_text = f"DOWNLOADING: {mb_downloaded} MB received..."
             
             current_time = time.time()
-            # THROTTLING PROTOCOL: Limits database I/O to every 5% step or every 2 seconds minimum
-            if (percent - last_reported_percent[0] >= 5) or (current_time - last_update_time[0] >= 2.0):
+            # THROTTLING PROTOCOL: Limits database I/O to every 3.0 seconds minimum or on completion
+            if (current_time - last_update_time[0] >= 3.0) or (percent == 100):
                 last_reported_percent[0] = percent
                 last_update_time[0] = current_time
                 self.update_state(
                     state='PROGRESS', 
-                    meta={'percent': percent, 'status': f"DOWNLOADING: {percent}%"}
+                    meta={'percent': percent, 'status': status_text}
                 )
         elif d['status'] == 'finished':
             self.update_state(state='PROGRESS', meta={'percent': 99, 'status': 'STITCHING AUDIO/VIDEO...'})
@@ -75,7 +84,8 @@ def process_download(self, url, format_id, title):
         'quiet': True,
         'ffmpeg_location': FFMPEG_PATH,
         'proxy': PROXY_URL,
-        'js_runtimes': {'deno': {}, 'node': {}},  # Maximizes compatibility with the EJS interpreter patch
+        'socket_timeout': 15,  # Drops hanging proxy connections after 15 seconds
+        'js_runtimes': {'deno': {}, 'node': {}},  # Uses Deno/Node to solve signature challenges
         'progress_hooks': [progress_hook],
         'extractor_args': {
             'youtube': {
@@ -114,6 +124,7 @@ def fetch_metadata():
         'skip_download': True,
         'quiet': True,
         'proxy': PROXY_URL,
+        'socket_timeout': 15,
         'js_runtimes': {'deno': {}, 'node': {}},
         'extractor_args': {
             'youtube': {
@@ -178,6 +189,7 @@ def trigger_download():
             'skip_download': True,
             'quiet': True,
             'proxy': PROXY_URL,
+            'socket_timeout': 15,
             'js_runtimes': {'deno': {}, 'node': {}},
             'extractor_args': {
                 'youtube': {
