@@ -1,0 +1,16 @@
+# Ignore local virtual environment
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# Ignore local media & executables
+downloads/
+*.mp4
+*.mp3
+ffmpeg.exe
+ffprobe.exe
+
+# Ignore OS files
+.DS_Store
+Thumbs.db
