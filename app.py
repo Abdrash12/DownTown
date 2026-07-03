@@ -9,11 +9,13 @@ app = Flask(__name__)
 # ==========================================
 # 1. DATABASE & CONFIGURATION
 # ==========================================
+# Grabs REDIS_URL from Render environment variables, falls back to local testing string
 REDIS_URL = os.environ.get(
     'REDIS_URL',
     'rediss://default:YOUR_PASSWORD@YOUR_REGION.upstash.io:6379?ssl_cert_reqs=CERT_NONE'
 )
 
+# Modern Celery 5.x+ configuration syntax
 app.config['broker_url'] = REDIS_URL
 app.config['result_backend'] = REDIS_URL
 
@@ -23,8 +25,13 @@ celery_app.conf.update(app.config)
 DOWNLOAD_DIR = os.path.join(os.getcwd(), 'downloads')
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
+# Detect whether running with local Windows ffmpeg binary or Linux system binary on Render
 local_exe = os.path.join(os.getcwd(), 'ffmpeg.exe')
 FFMPEG_PATH = local_exe if os.path.exists(local_exe) else 'ffmpeg'
+
+# Proxy configuration: Automatically uses the local Cloudflare WARP tunnel on Render,
+# or checks for a custom PROXY_URL environment variable.
+WARP_PROXY = os.environ.get('PROXY_URL', 'socks5://127.0.0.1:4000' if os.environ.get('RENDER') else None)
 
 
 # ==========================================
@@ -60,17 +67,20 @@ def process_download(self, url, format_id, title):
             )
 
     ydl_opts = {
+        # Indestructible format string: prevents 'Requested format is not available' errors
         'format': f"{format_id}+bestaudio/{format_id}/bestvideo+bestaudio/best",
         'outtmpl': output_template,
         'merge_output_format': 'mp4',
         'quiet': True,
         'ffmpeg_location': FFMPEG_PATH,
-        # Uses Node.js to solve YouTube PO Token puzzles automatically (zero cookies needed!)
+        # Route through Cloudflare WARP to bypass AWS IP blocking
+        'proxy': WARP_PROXY,
+        # Uses Node.js to solve YouTube PO Token puzzles automatically
         'js_runtimes': {'node': {}},
         'progress_hooks': [progress_hook],
         'extractor_args': {
             'youtube': {
-                # Embedded & creator endpoints bypass AWS datacenter blocks
+                # Embedded & creator endpoints rarely serve CAPTCHAs to cloud servers
                 'player_client': ['tv_embedded', 'android_creator', 'ios_creator', 'tv']
             }
         }
@@ -108,6 +118,7 @@ def fetch_metadata():
         'skip_download': True,
         'quiet': True,
         'ffmpeg_location': FFMPEG_PATH,
+        'proxy': WARP_PROXY,
         'js_runtimes': {'node': {}},
         'extractor_args': {
             'youtube': {
@@ -150,14 +161,17 @@ def fetch_metadata():
 def trigger_download():
     data = request.json
     try:
+        # Standard Queue Path via Celery & Upstash Redis
         task = process_download.apply_async(args=[data['url'], data['format_id'], data['title']])
         return jsonify({'task_id': task.id, 'fallback': False})
     except Exception as redis_error:
+        # Automated Fallback Path: triggers instantly if Upstash quota caps out or connection drops
         print(f"[FALLBACK] Redis queue unavailable. Handing direct stream to browser.")
         ydl_opts = {
             'format': f"{data['format_id']}+bestaudio/{data['format_id']}/bestvideo+bestaudio/best",
             'skip_download': True,
             'quiet': True,
+            'proxy': WARP_PROXY,
             'js_runtimes': {'node': {}},
             'extractor_args': {
                 'youtube': {
