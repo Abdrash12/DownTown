@@ -88,7 +88,8 @@ def process_download(self, url, format_id, title):
             )
 
     ydl_opts = {
-        'format': f'{format_id}+bestaudio/{format_id}/best',
+        # Indestructible format string: prevents 'Requested format is not available' errors
+        'format': f"{format_id}+bestaudio/{format_id}/bestvideo+bestaudio/best",
         'outtmpl': output_template,
         'merge_output_format': 'mp4',
         'quiet': True,
@@ -187,7 +188,7 @@ def trigger_download():
     except Exception as redis_error:
         print(f"[FALLBACK] Redis queue unavailable. Handing direct stream to browser.")
         ydl_opts = {
-            'format': f"{data['format_id']}+bestaudio/{data['format_id']}/best",
+            'format': f"{data['format_id']}+bestaudio/{data['format_id']}/bestvideo+bestaudio/best",
             'skip_download': True,
             'quiet': True,
             'js_runtimes': {'deno': {}, 'node': {}, 'quickjs': {}},
