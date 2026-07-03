@@ -1,16 +1,17 @@
 import os
 import time
-from flask import Flask, render_template, request, jsonify, send_file
+import requests
+from flask import Flask, render_template, request, jsonify, send_file, Response, stream_with_context
 from celery import Celery
 import yt_dlp
 
 app = Flask(__name__, template_folder='templates', static_folder='static')
 
 # ==========================================
-# 1. HARDENED CONFIGURATION & REDIS OPTIMIZATION
+# 1. HARDENED CONFIGURATION & REDIS SETUP
 # ==========================================
 REDIS_URL = os.environ.get('REDIS_URL')
-PROXY_URL = os.environ.get('PROXY_URL')  # Format: http://username:password@ip:port
+PROXY_URL = os.environ.get('PROXY_URL')  # Format: http://username:password@endpoint:port
 
 if PROXY_URL:
     print(f"[BOOT] HTTP Proxy active: {PROXY_URL[:15]}****")
@@ -20,9 +21,9 @@ else:
 app.config['broker_url'] = REDIS_URL
 app.config['result_backend'] = REDIS_URL
 
-# --- REDIS OPTIMIZATIONS TO MINIMIZE OVERHEAD & COMMAND LIMITS ---
+# --- REDIS OPTIMIZATIONS TO PROTECT UPSTASH QUOTA ---
 app.config['result_expires'] = 900  # Automatically delete task results from Redis after 15 mins
-app.config['worker_send_task_events'] = False  # Disable heartbeat monitoring spam to save Upstash commands
+app.config['worker_send_task_events'] = False  # Disable heartbeat monitoring spam to save command quota
 app.config['task_ignore_result'] = False  # Maintained for explicit state checks
 app.config['broker_connection_retry_on_startup'] = True
 
@@ -32,7 +33,7 @@ celery_app.conf.update(app.config)
 DOWNLOAD_DIR = os.path.join(os.getcwd(), 'downloads')
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# Detect FFmpeg location (Local Windows sandbox vs Render Linux environment)
+# Detect FFmpeg location (Local Windows sandbox vs Render Linux container)
 local_exe = os.path.join(os.getcwd(), 'ffmpeg.exe')
 FFMPEG_PATH = local_exe if os.path.exists(local_exe) else 'ffmpeg'
 
@@ -42,7 +43,7 @@ FFMPEG_PATH = local_exe if os.path.exists(local_exe) else 'ffmpeg'
 # ==========================================
 @celery_app.task(bind=True)
 def process_download(self, url, format_id, title):
-    # 1. IMMEDIATELY report activity so the UI doesn't sit frozen for 25 seconds!
+    # Immediately report activity so the frontend UI doesn't hang on PENDING during proxy handshakes
     self.update_state(
         state='PROGRESS', 
         meta={'percent': 5, 'status': 'SOLVING JS CHALLENGES & PROXY HANDSHAKE...'}
@@ -50,12 +51,8 @@ def process_download(self, url, format_id, title):
 
     safe_title = "".join(x for x in title if x.isalnum() or x in " _-").strip()
     output_template = os.path.join(DOWNLOAD_DIR, f"{safe_title}.%(ext)s")
-    
-def process_download(self, url, format_id, title):
-    safe_title = "".join(x for x in title if x.isalnum() or x in " _-").strip()
-    output_template = os.path.join(DOWNLOAD_DIR, f"{safe_title}.%(ext)s")
 
-    # Tracking states internally to throttle Redis write frequencies
+    # Tracking states internally to throttle database write frequencies
     last_update_time = [0]
     last_reported_percent = [-1]
 
@@ -72,11 +69,11 @@ def process_download(self, url, format_id, title):
                 status_text = f"DOWNLOADING: {percent}% ({mb_downloaded} MB)"
             else:
                 # If YouTube hides total bytes, report progressive MB instead of stalling at 0%
-                percent = -1  # Special flag for frontend to show an indeterminate spinner
+                percent = -1  # Special flag for frontend to show an indeterminate pulsing bar
                 status_text = f"DOWNLOADING: {mb_downloaded} MB received..."
             
             current_time = time.time()
-            # THROTTLING PROTOCOL: Limits database I/O to every 3.0 seconds minimum or on completion
+            # THROTTLING PROTOCOL: Limits Upstash writes to at most once every 3.0 seconds
             if (current_time - last_update_time[0] >= 3.0) or (percent == 100):
                 last_reported_percent[0] = percent
                 last_update_time[0] = current_time
@@ -94,12 +91,12 @@ def process_download(self, url, format_id, title):
         'quiet': True,
         'ffmpeg_location': FFMPEG_PATH,
         'proxy': PROXY_URL,
-        'socket_timeout': 15,  # Drops hanging proxy connections after 15 seconds
+        'socket_timeout': 15,  # Drops hanging residential proxy connections after 15 seconds
         'js_runtimes': {'deno': {}, 'node': {}},  # Uses Deno/Node to solve signature challenges
         'progress_hooks': [progress_hook],
         'extractor_args': {
             'youtube': {
-                # GitHub official recommended client cascade to circumvent datacenter bot detection blocks
+                # Official recommended client cascade to circumvent datacenter bot detection blocks
                 'player_client': ['web_embedded', 'android_vr', 'default', 'web']
             }
         }
@@ -184,16 +181,14 @@ def trigger_download():
     title = data.get('title', 'Video')
 
     try:
-        # ATTEMPT 1: Primary Task Delegation via Upstash Redis Instance
+        # ATTEMPT 1: Primary Background Task Delegation via Upstash Redis Instance
         task = process_download.apply_async(args=[url, format_id, title])
         return jsonify({'task_id': task.id, 'fallback': False})
     
     except Exception as e:
-        # ATTEMPT 2: EFFICIENT CLIENT-SIDE CDN FALLBACK (0% Server Storage, 0% Server Bandwidth)
-        print(f"[QUEUE OFFLINE] Redis unreachable ({e}). Switching to Direct Browser CDN Streaming.")
+        # ATTEMPT 2: 0-RAM CHUNKED PIPING FALLBACK (Bypasses Google 403 IP-Lock)
+        print(f"[QUEUE OFFLINE] Redis unreachable ({e}). Switching to Chunked Pipe Stream.")
         
-        # Requests pre-merged progressive streams (audio+video together) so the client's PC 
-        # downloads straight from Google's delivery nodes without using server disk or memory.
         ydl_opts = {
             'format': 'best[ext=mp4]/bestprogressive/best',
             'skip_download': True,
@@ -211,21 +206,48 @@ def trigger_download():
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
                 direct_cdn_url = info.get('url')
+                safe_title = "".join(x for x in title if x.isalnum() or x in " _-").strip()
                 
+                # Route through internal streaming endpoint instead of raw CDN URL to prevent 403 IP mismatch
                 return jsonify({
                     'fallback': True,
-                    'direct_url': direct_cdn_url,
-                    'status': 'Queue down. Redirecting connection straight to global CDN.'
+                    'stream_url': f"/stream_fallback?url={requests.utils.quote(direct_cdn_url)}&title={requests.utils.quote(safe_title)}.mp4",
+                    'status': 'Queue offline. Piping stream directly through server gateway.'
                 })
         except Exception as yt_err:
-            return jsonify({'error': f"Queue and Client CDN Fallback both failed: {str(yt_err)}"}), 500
+            return jsonify({'error': f"Queue and Fallback failed: {str(yt_err)}"}), 500
+
+
+@app.route('/stream_fallback')
+def stream_fallback():
+    """Pipes video chunks from YouTube CDN to client with an 8 KB memory footprint."""
+    cdn_url = request.args.get('url')
+    filename = request.args.get('title', 'video.mp4')
+    
+    if not cdn_url:
+        return "Missing stream URL", 400
+
+    # Request the stream using the same proxy that extracted the URL signature
+    proxies = {'http': PROXY_URL, 'https': PROXY_URL} if PROXY_URL else None
+    req = requests.get(cdn_url, stream=True, proxies=proxies, timeout=20)
+    
+    def generate():
+        for chunk in req.iter_content(chunk_size=8192):  # Keeps server RAM consumption at ~8 KB
+            if chunk:
+                yield chunk
+
+    headers = {
+        'Content-Disposition': f'attachment; filename="{filename}"',
+        'Content-Type': req.headers.get('Content-Type', 'video/mp4')
+    }
+    return Response(stream_with_context(generate()), headers=headers)
 
 
 @app.route('/status/<task_id>')
 def task_status(task_id):
     task = process_download.AsyncResult(task_id)
     if task.state == 'PENDING':
-        return jsonify({'state': task.state, 'percent': 0, 'status': 'IN QUEUE...'})
+        return jsonify({'state': task.state, 'percent': 10, 'status': 'SOLVING PROXY CHALLENGE...'})
     elif task.state == 'PROGRESS':
         return jsonify({
             'state': task.state,
