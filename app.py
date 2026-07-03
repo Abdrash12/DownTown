@@ -9,8 +9,9 @@ app = Flask(__name__, template_folder='templates', static_folder='static')
 # ==========================================
 # 1. HARDENED CONFIGURATION & REDIS OPTIMIZATION
 # ==========================================
+# Grabs variables cleanly from the Render environment dashboard
 REDIS_URL = os.environ.get('REDIS_URL')
-PROXY_URL = os.environ.get('PROXY_URL') # Webshare HTTP Proxy
+PROXY_URL = os.environ.get('PROXY_URL')  # Format: http://username:password@ip:port
 
 if PROXY_URL:
     print(f"[BOOT] HTTP Proxy active: {PROXY_URL[:15]}****")
@@ -20,10 +21,10 @@ else:
 app.config['broker_url'] = REDIS_URL
 app.config['result_backend'] = REDIS_URL
 
-# --- REDIS MEMORY & I/O OPTIMIZATIONS ---
-app.config['result_expires'] = 900  # Auto-delete task results from Redis after 15 mins
-app.config['worker_send_task_events'] = False  # Disable heartbeat spam to save Upstash commands
-app.config['task_ignore_result'] = False  # Keep enabled only for progress tracking
+# --- REDIS OPTIMIZATIONS TO MINIMIZE OVERHEAD & COMMAND LIMITS ---
+app.config['result_expires'] = 900  # Automatically delete task results from Redis after 15 mins
+app.config['worker_send_task_events'] = False  # Disable heartbeat monitoring spam to save Upstash commands
+app.config['task_ignore_result'] = False  # Maintained for explicit state checks
 app.config['broker_connection_retry_on_startup'] = True
 
 celery_app = Celery(app.name, broker=app.config['broker_url'])
@@ -32,19 +33,20 @@ celery_app.conf.update(app.config)
 DOWNLOAD_DIR = os.path.join(os.getcwd(), 'downloads')
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
+# Detect FFmpeg location (Local Windows sandbox vs Render Linux environment)
 local_exe = os.path.join(os.getcwd(), 'ffmpeg.exe')
 FFMPEG_PATH = local_exe if os.path.exists(local_exe) else 'ffmpeg'
 
 
 # ==========================================
-# 2. CELERY TASK (WITH THROTTLED REDIS WRITES)
+# 2. CELERY BACKGROUND TASK WORKER
 # ==========================================
 @celery_app.task(bind=True)
 def process_download(self, url, format_id, title):
     safe_title = "".join(x for x in title if x.isalnum() or x in " _-").strip()
     output_template = os.path.join(DOWNLOAD_DIR, f"{safe_title}.%(ext)s")
 
-    # Track last update time and percentage to throttle Redis writes
+    # Tracking states internally to throttle Redis write frequencies
     last_update_time = [0]
     last_reported_percent = [-1]
 
@@ -55,7 +57,7 @@ def process_download(self, url, format_id, title):
             percent = int((downloaded / total_bytes) * 100) if total_bytes > 0 else 0
             
             current_time = time.time()
-            # THROTTLE RULE: Only write to Redis if percent increased by >= 5% OR 2 seconds passed
+            # THROTTLING PROTOCOL: Limits database I/O to every 5% step or every 2 seconds minimum
             if (percent - last_reported_percent[0] >= 5) or (current_time - last_update_time[0] >= 2.0):
                 last_reported_percent[0] = percent
                 last_update_time[0] = current_time
@@ -64,7 +66,7 @@ def process_download(self, url, format_id, title):
                     meta={'percent': percent, 'status': f"DOWNLOADING: {percent}%"}
                 )
         elif d['status'] == 'finished':
-            self.update_state(state='PROGRESS', meta={'percent': 99, 'status': 'STITCHING STREAMS...'})
+            self.update_state(state='PROGRESS', meta={'percent': 99, 'status': 'STITCHING AUDIO/VIDEO...'})
 
     ydl_opts = {
         'format': f"{format_id}+bestaudio/{format_id}/bestvideo+bestaudio/best",
@@ -73,10 +75,11 @@ def process_download(self, url, format_id, title):
         'quiet': True,
         'ffmpeg_location': FFMPEG_PATH,
         'proxy': PROXY_URL,
-        'js_runtimes': {'node': {}},
+        'js_runtimes': {'deno': {}, 'node': {}},  # Maximizes compatibility with the EJS interpreter patch
         'progress_hooks': [progress_hook],
         'extractor_args': {
             'youtube': {
+                # GitHub official recommended client cascade to circumvent datacenter bot detection blocks
                 'player_client': ['web_embedded', 'android_vr', 'default', 'web']
             }
         }
@@ -93,7 +96,7 @@ def process_download(self, url, format_id, title):
 
 
 # ==========================================
-# 3. HTTP ENDPOINTS & TRUE CLIENT DIRECT FALLBACK
+# 3. HTTP ENDPOINTS & FAILSAFE ROUTING
 # ==========================================
 @app.route('/')
 def index():
@@ -111,8 +114,12 @@ def fetch_metadata():
         'skip_download': True,
         'quiet': True,
         'proxy': PROXY_URL,
-        'js_runtimes': {'node': {}},
-        'extractor_args': {'youtube': {'player_client': ['web_embedded', 'android_vr', 'default', 'web']}}
+        'js_runtimes': {'deno': {}, 'node': {}},
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['web_embedded', 'android_vr', 'default', 'web']
+            }
+        }
     }
     
     try:
@@ -156,23 +163,27 @@ def trigger_download():
     title = data.get('title', 'Video')
 
     try:
-        # ATTEMPT 1: Background Queue via Upstash Redis
+        # ATTEMPT 1: Primary Task Delegation via Upstash Redis Instance
         task = process_download.apply_async(args=[url, format_id, title])
         return jsonify({'task_id': task.id, 'fallback': False})
     
     except Exception as e:
-        # ATTEMPT 2: TRUE DIRECT CLIENT-SIDE FALLBACK (0% Server Load)
-        print(f"[QUEUE OFFLINE] Redis unreachable ({e}). Switching to Direct Client CDN Download.")
+        # ATTEMPT 2: EFFICIENT CLIENT-SIDE CDN FALLBACK (0% Server Storage, 0% Server Bandwidth)
+        print(f"[QUEUE OFFLINE] Redis unreachable ({e}). Switching to Direct Browser CDN Streaming.")
         
-        # We explicitly request 'best[ext=mp4]' or progressive formats so Google provides a 
-        # single URL containing BOTH video and audio that the browser can download directly.
+        # Requests pre-merged progressive streams (audio+video together) so the client's PC 
+        # downloads straight from Google's delivery nodes without using server disk or memory.
         ydl_opts = {
             'format': 'best[ext=mp4]/bestprogressive/best',
             'skip_download': True,
             'quiet': True,
             'proxy': PROXY_URL,
-            'js_runtimes': {'node': {}},
-            'extractor_args': {'youtube': {'player_client': ['web_embedded', 'android_vr', 'default']}}
+            'js_runtimes': {'deno': {}, 'node': {}},
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['web_embedded', 'android_vr', 'default']
+                }
+            }
         }
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -182,10 +193,10 @@ def trigger_download():
                 return jsonify({
                     'fallback': True,
                     'direct_url': direct_cdn_url,
-                    'status': 'Queue offline. Download initiated directly from YouTube CDN to your PC.'
+                    'status': 'Queue down. Redirecting connection straight to global CDN.'
                 })
         except Exception as yt_err:
-            return jsonify({'error': f"Queue and Direct Fallback failed: {str(yt_err)}"}), 500
+            return jsonify({'error': f"Queue and Client CDN Fallback both failed: {str(yt_err)}"}), 500
 
 
 @app.route('/status/<task_id>')
