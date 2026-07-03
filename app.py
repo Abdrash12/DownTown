@@ -10,8 +10,8 @@ app = Flask(__name__)
 # 1. DATABASE & WORKER CONFIGURATION
 # ==========================================
 # REPLACE THIS URL with your Upstash Redis URL!
-# (Keep the ?ssl_cert_reqs=CERT_NONE at the very end to prevent cloud SSL handshake crashes)
-REDIS_URL = 'rediss://default:YOUR_PASSWORD@YOUR_REGION.upstash.io:6379?ssl_cert_reqs=CERT_NONE'
+# (Keep the ?ssl_cert_reqs=CERT_NONE at the very end to prevent cloud SSL handshake crashes)# Grabs the REDIS_URL from Render's environment variables, or falls back to local if missing
+REDIS_URL = os.environ.get('REDIS_URL', 'rediss://default:YOUR_PASSWORD@YOUR_REGION.upstash.io:6379?ssl_cert_reqs=CERT_NONE')
 
 app.config['CELERY_BROKER_URL'] = REDIS_URL
 app.config['CELERY_RESULT_BACKEND'] = REDIS_URL
