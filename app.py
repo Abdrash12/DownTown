@@ -42,6 +42,16 @@ FFMPEG_PATH = local_exe if os.path.exists(local_exe) else 'ffmpeg'
 # ==========================================
 @celery_app.task(bind=True)
 def process_download(self, url, format_id, title):
+    # 1. IMMEDIATELY report activity so the UI doesn't sit frozen for 25 seconds!
+    self.update_state(
+        state='PROGRESS', 
+        meta={'percent': 5, 'status': 'SOLVING JS CHALLENGES & PROXY HANDSHAKE...'}
+    )
+
+    safe_title = "".join(x for x in title if x.isalnum() or x in " _-").strip()
+    output_template = os.path.join(DOWNLOAD_DIR, f"{safe_title}.%(ext)s")
+    
+def process_download(self, url, format_id, title):
     safe_title = "".join(x for x in title if x.isalnum() or x in " _-").strip()
     output_template = os.path.join(DOWNLOAD_DIR, f"{safe_title}.%(ext)s")
 
