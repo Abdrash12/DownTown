@@ -4,3 +4,4 @@ redis
 yt-dlp
 yt-dlp-ejs
 gunicorn
+requests
