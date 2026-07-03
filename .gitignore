@@ -11,6 +11,7 @@ downloads/
 ffmpeg.exe
 ffprobe.exe
 cookies.txt
+render_cookies.txt
 
 # Ignore OS files
 .DS_Store
