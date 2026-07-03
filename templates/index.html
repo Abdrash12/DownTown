@@ -323,8 +323,7 @@
             </div>
         </div>
     </div>
-
-   <script>
+<script>
         const fetchBtn = document.getElementById('fetchBtn');
         const videoUrlInput = document.getElementById('videoUrl');
         const loader = document.getElementById('loader');
@@ -449,6 +448,11 @@
                                 progressFill.style.width = `${percent}%`;
                                 progressText.innerText = `${percent}% // ${statusData.status}`;
                             }
+                        
+                        // NEW: Handles the 15-20 second proxy handshake wait without looking "frozen"
+                        } else if (statusData.state === 'PENDING') {
+                            progressFill.style.width = '10%';
+                            progressText.innerText = `[QUEUE] // ${statusData.status || 'SOLVING PROXY CHALLENGE...'}`;
                             
                         } else if (statusData.state === 'SUCCESS') {
                             clearInterval(activePollTimer);
