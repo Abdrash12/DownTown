@@ -11,6 +11,17 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # 4. Copy and install Python dependencies
+# --- INSTALL CLOUDFLARE WARP USER-SPACE TOOLS ---
+# Install curl to download our networking binaries
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+
+# Download wgcf (Cloudflare WARP profile generator)
+RUN curl -fsSL https://github.com/ViRb3/wgcf/releases/download/v2.2.22/wgcf_2.2.22_linux_amd64 -o /usr/local/bin/wgcf && \
+    chmod +x /usr/local/bin/wgcf
+
+# Download wireproxy (User-space WireGuard SOCKS5 proxy)
+RUN curl -fsSL https://github.com/pufferffish/wireproxy/releases/download/v1.0.9/wireproxy_linux_amd64.tar.gz | tar -xz -C /usr/local/bin/ && \
+    chmod +x /usr/local/bin/wireproxy
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
