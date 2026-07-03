@@ -324,13 +324,18 @@
         </div>
     </div>
 
-    <script>
+   <script>
         const fetchBtn = document.getElementById('fetchBtn');
         const videoUrlInput = document.getElementById('videoUrl');
         const loader = document.getElementById('loader');
         const resultCard = document.getElementById('resultCard');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const progressBox = document.getElementById('progressBox');
+        const progressFill = document.getElementById('progressFill');
+        const progressText = document.getElementById('progressText');
         
         let currentMetadata = null;
+        let activePollTimer = null; // GLOBAL CONTROLLER: Prevents duplicate polling loops!
 
         fetchBtn.addEventListener('click', async () => {
             const url = videoUrlInput.value.trim();
@@ -338,7 +343,8 @@
 
             loader.style.display = 'block';
             resultCard.style.display = 'none';
-            document.getElementById('progressBox').style.display = 'none';
+            progressBox.style.display = 'none';
+            if (activePollTimer) clearInterval(activePollTimer); // Kill active polling on new fetch
 
             try {
                 const response = await fetch('/fetch', {
@@ -375,25 +381,26 @@
             }
         });
 
-        // Solution 2: Real-Time Telemetry & Progress Bar Polling
-        document.getElementById('downloadBtn').addEventListener('click', async () => {
+        downloadBtn.addEventListener('click', async () => {
             if(!currentMetadata) return;
             
+            // KILL SWITCH: Clear any existing timers before starting a new download!
+            if (activePollTimer) {
+                clearInterval(activePollTimer);
+                activePollTimer = null;
+            }
+
             const selectedFormat = document.getElementById('formatSelector').value;
-            const progressBox = document.getElementById('progressBox');
-            const progressFill = document.getElementById('progressFill');
-            const progressText = document.getElementById('progressText');
             
-            // Hide standard glitch loader, reveal Progress Bar
             loader.style.display = 'none';
             progressBox.style.display = 'block';
             progressFill.style.width = '0%';
-            progressText.innerText = '0% // CONNECTING TO WORKER...';
+            progressFill.style.backgroundColor = '#FFE600'; // Ensure default yellow/accent color
+            progressText.innerText = '0% // INITIATING CONNECTION...';
             
-            document.getElementById('downloadBtn').disabled = true;
+            downloadBtn.disabled = true;
 
             try {
-                // 1. Dispatch task to Redis queue
                 const response = await fetch('/trigger_download', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -406,44 +413,76 @@
                 
                 const data = await response.json();
                 
-                // 2. Poll server every 1.5 seconds for snappy UI updates
-                const pollInterval = setInterval(async () => {
-                    const statusRes = await fetch(`/status/${data.task_id}`);
-                    const statusData = await statusRes.json();
-
-                    if (statusData.state === 'PROGRESS') {
-                        // Dynamically update Bar Width and Text in real time
-                        const percent = statusData.percent || 0;
-                        progressFill.style.width = `${percent}%`;
-                        progressText.innerText = `${percent}% // ${statusData.status}`;
-                        
-                    } else if (statusData.state === 'SUCCESS') {
-                        clearInterval(pollInterval);
-                        progressFill.style.width = '100%';
-                        progressFill.style.backgroundColor = '#5ad641'; // Turn bright green on finish!
-                        progressText.innerText = '100% // DOWNLOAD COMPLETE!';
-                        
-                        document.getElementById('downloadBtn').disabled = false;
-                        
-                        // Wait 2 seconds so user can enjoy the 100% completion before triggering save
-                        setTimeout(() => {
-                            progressBox.style.display = 'none';
-                            progressFill.style.backgroundColor = '#FFE600'; // Reset color
-                            window.location.href = `/download_file/${statusData.filename}`;
-                        }, 2000);
-                        
-                    } else if (statusData.state === 'FAILURE') {
-                        clearInterval(pollInterval);
-                        alert('Worker Failed: ' + statusData.error);
+                // --- CASE 1: REDIS IS OFFLINE -> INSTANT CLIENT-SIDE CDN FALLBACK ---
+                if (data.fallback && data.direct_url) {
+                    progressFill.style.width = '100%';
+                    progressFill.style.backgroundColor = '#5ad641';
+                    progressText.innerText = '100% // QUEUE BYPASSED. STREAMING TO PC...';
+                    
+                    setTimeout(() => {
                         progressBox.style.display = 'none';
-                        document.getElementById('downloadBtn').disabled = false;
+                        downloadBtn.disabled = false;
+                        // Trigger direct browser download from YouTube CDN
+                        window.location.href = data.direct_url;
+                    }, 1500);
+                    return; // EXIT FUNCTION IMMEDIATELY (DO NOT START POLLING!)
+                }
+
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+                
+                // --- CASE 2: REDIS ACTIVE -> POLL WORKER EVERY 3 SECONDS ---
+                activePollTimer = setInterval(async () => {
+                    try {
+                        const statusRes = await fetch(`/status/${data.task_id}`);
+                        const statusData = await statusRes.json();
+
+                        if (statusData.state === 'PROGRESS') {
+                            const percent = statusData.percent || 0;
+                            
+                            if (percent === -1) {
+                                // Indeterminate size: Pulse UI at 50% instead of freezing at 0%
+                                progressFill.style.width = '50%';
+                                progressText.innerText = `[STREAMING] // ${statusData.status}`;
+                            } else {
+                                progressFill.style.width = `${percent}%`;
+                                progressText.innerText = `${percent}% // ${statusData.status}`;
+                            }
+                            
+                        } else if (statusData.state === 'SUCCESS') {
+                            clearInterval(activePollTimer);
+                            activePollTimer = null;
+                            
+                            progressFill.style.width = '100%';
+                            progressFill.style.backgroundColor = '#5ad641';
+                            progressText.innerText = '100% // DOWNLOAD COMPLETE!';
+                            downloadBtn.disabled = false;
+                            
+                            setTimeout(() => {
+                                progressBox.style.display = 'none';
+                                progressFill.style.backgroundColor = '#FFE600';
+                                window.location.href = `/download_file/${statusData.filename}`;
+                            }, 2000);
+                            
+                        } else if (statusData.state === 'FAILURE') {
+                            clearInterval(activePollTimer);
+                            activePollTimer = null;
+                            
+                            alert('Worker Failed: ' + (statusData.error || 'Unknown Error'));
+                            progressBox.style.display = 'none';
+                            downloadBtn.disabled = false;
+                        }
+                    } catch (pollErr) {
+                        console.error("Polling Network Error:", pollErr);
+                        // Do not clear interval immediately on a single network blip
                     }
-                }, 1500);
+                }, 3000); // 3000ms protects your Upstash 10k daily limit!
 
             } catch (err) {
-                alert('Failed to connect to background queue.');
+                alert('Connection Error: ' + err.message);
                 progressBox.style.display = 'none';
-                document.getElementById('downloadBtn').disabled = false;
+                downloadBtn.disabled = false;
             }
         });
     </script>
