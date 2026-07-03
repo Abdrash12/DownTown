@@ -9,10 +9,9 @@ app = Flask(__name__)
 # ==========================================
 # 1. DATABASE & CONFIGURATION
 # ==========================================
-REDIS_URL = os.environ.get(
-    'REDIS_URL',
-    'rediss://default:YOUR_PASSWORD@YOUR_REGION.upstash.io:6379?ssl_cert_reqs=CERT_NONE'
-)
+# Ensure you are using the 'rediss' protocol for Upstash
+REDIS_URL = os.environ.get('REDIS_URL', 'rediss://default:gQAAAAAAAWV9AAIgcDE5YTlkZTI5NzJhODA0ZmE0YTVhYWRmNjRkYWY2NjQ1OQ@daring-gopher-91517.upstash.io:6379?ssl_cert_reqs=CERT_NONE')
+celery_app = Celery(app.name, broker=REDIS_URL, backend=REDIS_URL)
 
 app.config['broker_url'] = REDIS_URL
 app.config['result_backend'] = REDIS_URL
