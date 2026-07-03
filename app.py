@@ -23,7 +23,16 @@ celery_app.conf.update(app.config)
 # Ensure a safe local directory exists to store the stitched MP4 files
 DOWNLOAD_DIR = os.path.join(os.getcwd(), 'downloads')
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+# Create a secure path inside the container for the cookies
+COOKIES_PATH = os.path.join(os.getcwd(), 'render_cookies.txt')
 
+# If Render has a COOKIES_CONTENT variable set, write it down on startup
+if os.environ.get('COOKIES_CONTENT'):
+    with open(COOKIES_PATH, 'w', encoding='utf-8') as f:
+        f.write(os.environ.get('COOKIES_CONTENT'))
+else:
+    # Fallback to local file if running on your PC
+    COOKIES_PATH = 'cookies.txt' if os.path.exists('cookies.txt') else None
 # Helper: Detect if we are running locally on Windows or on a Linux Cloud Container (Render)
 local_exe = os.path.join(os.getcwd(), 'ffmpeg.exe')
 FFMPEG_PATH = local_exe if os.path.exists(local_exe) else 'ffmpeg'
