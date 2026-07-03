@@ -1,5 +1,5 @@
 import os
-import sys
+import json
 from flask import Flask, render_template, request, jsonify, send_file
 from celery import Celery
 import yt_dlp
@@ -9,13 +9,13 @@ app = Flask(__name__)
 # ==========================================
 # 1. DATABASE & CONFIGURATION
 # ==========================================
-# Grabs the environment variable from Render; falls back to local placeholder for Windows testing
+# Grabs REDIS_URL from Render environment variables, falls back to local testing string
 REDIS_URL = os.environ.get(
-    'REDIS_URL', 
+    'REDIS_URL',
     'rediss://default:YOUR_PASSWORD@YOUR_REGION.upstash.io:6379?ssl_cert_reqs=CERT_NONE'
 )
 
-# Modern Celery 5.x lower-case configuration parameters
+# Modern Celery 5.x+ configuration syntax
 app.config['broker_url'] = REDIS_URL
 app.config['result_backend'] = REDIS_URL
 
@@ -25,23 +25,45 @@ celery_app.conf.update(app.config)
 DOWNLOAD_DIR = os.path.join(os.getcwd(), 'downloads')
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# Detect if we are using local Windows ffmpeg binary or native global Linux package
+# Detect whether running with local Windows ffmpeg binary or Linux system binary on Render
 local_exe = os.path.join(os.getcwd(), 'ffmpeg.exe')
 FFMPEG_PATH = local_exe if os.path.exists(local_exe) else 'ffmpeg'
 
-# --- SECURITY COOKIE INJECTION LAYER ---
-# Read secure multi-line cookies from Render dashboard to bypass datacenter anti-bot blocks
+# ==========================================
+# 2. SECURITY & CLOUD COOKIE INJECTION LAYER
+# ==========================================
+# Reads raw Netscape or JSON cookies from Render dashboard to bypass anti-bot blocks
 COOKIES_PATH = os.path.join(os.getcwd(), 'render_cookies.txt')
-if os.environ.get('COOKIES_CONTENT'):
-    with open(COOKIES_PATH, 'w', encoding='utf-8') as f:
-        f.write(os.environ.get('COOKIES_CONTENT'))
+cookies_content = os.environ.get('COOKIES_CONTENT')
+
+if cookies_content:
+    try:
+        # If cookies are provided in JSON format, convert to Netscape text format
+        cookies_json = json.loads(cookies_content)
+        with open(COOKIES_PATH, 'w', encoding='utf-8') as f:
+            f.write('# Netscape HTTP Cookie File\n')
+            for cookie in cookies_json:
+                domain = cookie.get('domain', '')
+                include_subdomains = 'TRUE' if domain.startswith('.') else 'FALSE'
+                path = cookie.get('path', '/')
+                secure = 'TRUE' if cookie.get('secure', False) else 'FALSE'
+                expires = str(int(cookie.get('expirationDate', cookie.get('expires', 0))))
+                name = cookie.get('name', '')
+                value = cookie.get('value', '')
+                f.write(f"{domain}\t{include_subdomains}\t{path}\t{secure}\t{expires}\t{name}\t{value}\n")
+        print("[COOKIES] Successfully parsed JSON cookies and converted to Netscape format.")
+    except json.JSONDecodeError:
+        # Fallback if the string is already in standard Netscape text format
+        with open(COOKIES_PATH, 'w', encoding='utf-8') as f:
+            f.write(cookies_content)
+        print("[COOKIES] Using raw Netscape cookie text directly.")
 else:
-    # Local fallback for your desktop environment testing
+    # Local fallback for desktop environment testing
     COOKIES_PATH = 'cookies.txt' if os.path.exists('cookies.txt') else None
 
 
 # ==========================================
-# 2. BACKGROUND CONCURRENT TASK WORKER
+# 3. BACKGROUND CONCURRENT TASK WORKER
 # ==========================================
 @celery_app.task(bind=True)
 def process_download(self, url, format_id, title):
@@ -73,7 +95,8 @@ def process_download(self, url, format_id, title):
             )
 
     ydl_opts = {
-        'format': format_id,
+        # Smart format string: stitches video with best audio, falls back to best available
+        'format': f'{format_id}+bestaudio/{format_id}/best',
         'outtmpl': output_template,
         'merge_output_format': 'mp4',
         'quiet': True,
@@ -100,7 +123,7 @@ def process_download(self, url, format_id, title):
 
 
 # ==========================================
-# 3. HTTP CONTROLLERS & ENDPOINTS
+# 4. HTTP CONTROLLERS & ENDPOINTS
 # ==========================================
 @app.route('/')
 def home():
@@ -129,7 +152,13 @@ def fetch_metadata():
             formats = []
             
             for f in info.get('formats', []):
-                if f.get('url'):
+                # Filter out storyboards, images, and formats without real codecs
+                if f.get('vcodec') == 'none' and f.get('acodec') == 'none':
+                    continue
+                if 'storyboard' in str(f.get('format_note', '')).lower():
+                    continue
+
+                if f.get('url') or f.get('format_id'):
                     ext = f.get('ext', 'mp4')
                     res = f.get('resolution') or f.get('format_note', 'Audio')
                     formats.append({
@@ -152,14 +181,14 @@ def fetch_metadata():
 def trigger_download():
     data = request.json
     try:
-        # Standard Queue Path
+        # Standard Queue Path via Celery & Upstash Redis
         task = process_download.apply_async(args=[data['url'], data['format_id'], data['title']])
         return jsonify({'task_id': task.id, 'fallback': False})
     except Exception as redis_error:
-        # Automated Fallback Path (Runs instantly if Upstash quota caps or drops connection)
-        print(f"[FALLBACK] Redis cap reached. Handing direct stream to browser.")
+        # Automated Fallback Path: triggers instantly if Upstash quota caps out or connection drops
+        print(f"[FALLBACK] Redis queue unavailable. Handing direct stream to browser.")
         ydl_opts = {
-            'format': data['format_id'],
+            'format': f"{data['format_id']}+bestaudio/{data['format_id']}/best",
             'skip_download': True,
             'quiet': True,
             'js_runtimes': {'deno': {}, 'node': {}, 'quickjs': {}}
