@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 set -e
 
-echo "[1/4] Installing Deno JS runtime (required for YouTube signature solving)..."
-curl -fsSL https://deno.land/install.sh | sh -s -- -y
+echo "[1/4] Installing Deno JS runtime (using Python to bypass missing unzip)..."
+mkdir -p ~/.deno/bin
+curl -L https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip -o /tmp/deno.zip
+python3 -m zipfile -e /tmp/deno.zip ~/.deno/bin
+chmod +x ~/.deno/bin/deno
+rm /tmp/deno.zip
 export PATH="$HOME/.deno/bin:$PATH"
 
 echo "[2/4] Upgrading yt-dlp and EJS challenge solver..."
