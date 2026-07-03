@@ -98,7 +98,7 @@ def process_download(self, url, format_id, title):
         'progress_hooks': [progress_hook],
         'extractor_args': {
             'youtube': {
-                'player_client': ['ios', 'android', 'tv', 'web']
+                'player_client': ['ios', 'android', 'tv']
             }
         }
     }
@@ -141,7 +141,7 @@ def fetch_metadata():
         'js_runtimes': {'deno': {}, 'node': {}, 'quickjs': {}},
         'extractor_args': {
             'youtube': {
-                'player_client': ['ios', 'android', 'tv', 'web']
+                'player_client': ['ios', 'android', 'tv']
             }
         }
     }
@@ -194,7 +194,7 @@ def trigger_download():
             'js_runtimes': {'deno': {}, 'node': {}, 'quickjs': {}},
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['ios', 'android', 'tv', 'web']
+                    'player_client': ['ios', 'android', 'tv']
                 }
             }
         }
