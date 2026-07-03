@@ -9,7 +9,7 @@ app = Flask(__name__)
 # 1. CONFIGURATION
 # ==========================================
 # Ensure REDIS_URL starts with 'rediss://' in your Render dashboard
-REDIS_URL = os.environ.get('REDIS_URL', 'rediss://default:gQAAAAAAAWV9AAIgcDE5YTlkZTI5NzJhODA0ZmE0YTVhYWRmNjRkYWY2NjQ1OQ@daring-gopher-91517.upstash.io:6379?ssl_cert_reqs=CERT_NONE')
+REDIS_URL = os.environ.get('REDIS_URL')
 PROXY_URL = os.environ.get('PROXY_URL') # Your Webshare http:// string
 
 app.config['broker_url'] = REDIS_URL
