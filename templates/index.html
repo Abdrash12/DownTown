@@ -413,24 +413,20 @@
                 const data = await response.json();
                 
                 // --- CASE 1: REDIS IS OFFLINE -> INSTANT CLIENT-SIDE CDN FALLBACK ---
-                if (data.fallback && data.direct_url) {
+            // --- CASE 1: REDIS IS OFFLINE -> 0-RAM CHUNKED PIPE FALLBACK ---
+                if (data.fallback && data.stream_url) {
                     progressFill.style.width = '100%';
                     progressFill.style.backgroundColor = '#5ad641';
-                    progressText.innerText = '100% // QUEUE BYPASSED. STREAMING TO PC...';
+                    progressText.innerText = '100% // QUEUE BYPASSED. PIPING STREAM...';
                     
                     setTimeout(() => {
                         progressBox.style.display = 'none';
                         downloadBtn.disabled = false;
-                        // Trigger direct browser download from YouTube CDN
-                        window.location.href = data.direct_url;
+                        // Routes through your safe server pipe to prevent Google 403 errors
+                        window.location.href = data.stream_url;
                     }, 1500);
-                    return; // EXIT FUNCTION IMMEDIATELY (DO NOT START POLLING!)
+                    return; 
                 }
-
-                if (data.error) {
-                    throw new Error(data.error);
-                }
-                
                 // --- CASE 2: REDIS ACTIVE -> POLL WORKER EVERY 3 SECONDS ---
                 activePollTimer = setInterval(async () => {
                     try {
