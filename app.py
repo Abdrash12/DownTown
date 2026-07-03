@@ -9,13 +9,11 @@ app = Flask(__name__)
 # ==========================================
 # 1. DATABASE & CONFIGURATION
 # ==========================================
-# Grabs REDIS_URL from Render environment variables, falls back to local testing string
 REDIS_URL = os.environ.get(
     'REDIS_URL',
     'rediss://default:YOUR_PASSWORD@YOUR_REGION.upstash.io:6379?ssl_cert_reqs=CERT_NONE'
 )
 
-# Modern Celery 5.x+ configuration syntax
 app.config['broker_url'] = REDIS_URL
 app.config['result_backend'] = REDIS_URL
 
@@ -25,14 +23,8 @@ celery_app.conf.update(app.config)
 DOWNLOAD_DIR = os.path.join(os.getcwd(), 'downloads')
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# Detect whether running with local Windows ffmpeg binary or Linux system binary on Render
-local_exe = os.path.join(os.getcwd(), 'ffmpeg.exe')
-FFMPEG_PATH = local_exe if os.path.exists(local_exe) else 'ffmpeg'
-
-# Proxy configuration: Reads your HTTP Webshare proxy cleanly from Render environment variables.
-# No legacy local SOCKS5 or port 4000 fallbacks!
+FFMPEG_PATH = 'ffmpeg'
 PROXY_URL = os.environ.get('PROXY_URL')
-
 
 # ==========================================
 # 2. BACKGROUND CONCURRENT TASK WORKER
@@ -46,42 +38,22 @@ def process_download(self, url, format_id, title):
         if d['status'] == 'downloading':
             total_bytes = d.get('total_bytes') or d.get('total_bytes_estimate') or 0
             downloaded_bytes = d.get('downloaded_bytes', 0)
-            
             percentage = int((downloaded_bytes / total_bytes) * 100) if total_bytes > 0 else 0
-            speed = d.get('_speed_str', 'N/A')
-            eta = d.get('_eta_str', '0s')
-            
-            self.update_state(
-                state='PROGRESS',
-                meta={
-                    'percent': percentage,
-                    'speed': speed,
-                    'eta': eta,
-                    'status': f"DOWNLOADING: {percentage}% ({speed})"
-                }
-            )
-        elif d['status'] == 'finished':
-            self.update_state(
-                state='PROGRESS',
-                meta={'percent': 99, 'status': 'STITCHING STREAMS VIA FFMPEG...'}
-            )
+            self.update_state(state='PROGRESS', meta={'percent': percentage, 'status': f"DOWNLOADING: {percentage}%"})
 
     ydl_opts = {
-        # Indestructible format string: prevents 'Requested format is not available' errors
         'format': f"{format_id}+bestaudio/{format_id}/bestvideo+bestaudio/best",
         'outtmpl': output_template,
         'merge_output_format': 'mp4',
         'quiet': True,
         'ffmpeg_location': FFMPEG_PATH,
-        # Route through external HTTP proxy (Webshare) to bypass AWS IP blocking
         'proxy': PROXY_URL,
-        # Uses Node.js to solve YouTube PO Token puzzles automatically
         'js_runtimes': {'node': {}},
         'progress_hooks': [progress_hook],
         'extractor_args': {
             'youtube': {
-                # Embedded & creator endpoints rarely serve CAPTCHAs to cloud servers
-                'player_client': ['tv_embedded', 'android_creator', 'ios_creator', 'tv']
+                # This configuration balances bot bypass with DRM avoidance
+                'player_client': ['default', 'web', 'android', 'ios']
             }
         }
     }
@@ -92,13 +64,10 @@ def process_download(self, url, format_id, title):
             filename = ydl.prepare_filename(info)
             if not filename.endswith('.mp4'):
                 filename = filename.rsplit('.', 1)[0] + '.mp4'
-            
-            base_name = os.path.basename(filename)
-            return {'status': 'Completed', 'filename': base_name, 'percent': 100}
+            return {'status': 'Completed', 'filename': os.path.basename(filename), 'percent': 100}
     except Exception as e:
         self.update_state(state='FAILURE', meta={'exc_message': str(e)})
         raise Exception(str(e))
-
 
 # ==========================================
 # 3. HTTP CONTROLLERS & ENDPOINTS
@@ -107,115 +76,42 @@ def process_download(self, url, format_id, title):
 def home():
     return render_template('index.html')
 
-
 @app.route('/fetch', methods=['POST'])
 def fetch_metadata():
     url = request.json.get('url')
-    if not url:
-        return jsonify({'error': 'Please provide a valid URL!'}), 400
+    if not url: return jsonify({'error': 'No URL provided'}), 400
 
     ydl_opts = {
         'skip_download': True,
         'quiet': True,
-        'ffmpeg_location': FFMPEG_PATH,
         'proxy': PROXY_URL,
         'js_runtimes': {'node': {}},
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['tv_embedded', 'android_creator', 'ios_creator', 'tv']
-            }
-        }
+        'extractor_args': {'youtube': {'player_client': ['default', 'web', 'android', 'ios']}}
     }
     
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
-            formats = []
-            
-            for f in info.get('formats', []):
-                if f.get('vcodec') == 'none' and f.get('acodec') == 'none':
-                    continue
-                if 'storyboard' in str(f.get('format_note', '')).lower():
-                    continue
-
-                if f.get('url') or f.get('format_id'):
-                    ext = f.get('ext', 'mp4')
-                    res = f.get('resolution') or f.get('format_note', 'Audio')
-                    formats.append({
-                        'format_id': f.get('format_id'),
-                        'note': f"{ext.upper()} - {res}"
-                    })
-
-            return jsonify({
-                'title': info.get('title', 'Unknown Title'),
-                'thumbnail': info.get('thumbnail', ''),
-                'duration': f"{int(info.get('duration', 0)) // 60}m {int(info.get('duration', 0)) % 60}s",
-                'formats': formats,
-                'original_url': url
-            })
+            formats = [{'format_id': f.get('format_id'), 'note': f"{f.get('ext', 'mp4').upper()} - {f.get('resolution', 'Audio')}"} 
+                       for f in info.get('formats', []) if f.get('vcodec') != 'none']
+            return jsonify({'title': info.get('title'), 'thumbnail': info.get('thumbnail'), 'formats': formats})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-
 
 @app.route('/trigger_download', methods=['POST'])
 def trigger_download():
     data = request.json
-    try:
-        # Standard Queue Path via Celery & Upstash Redis
-        task = process_download.apply_async(args=[data['url'], data['format_id'], data['title']])
-        return jsonify({'task_id': task.id, 'fallback': False})
-    except Exception as redis_error:
-        # Automated Fallback Path: triggers instantly if Upstash quota caps out or connection drops
-        print(f"[FALLBACK] Redis queue unavailable. Handing direct stream to browser.")
-        ydl_opts = {
-            'format': f"{data['format_id']}+bestaudio/{data['format_id']}/bestvideo+bestaudio/best",
-            'skip_download': True,
-            'quiet': True,
-            'proxy': PROXY_URL,
-            'js_runtimes': {'node': {}},
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['tv_embedded', 'android_creator', 'ios_creator', 'tv']
-                }
-            }
-        }
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(data['url'], download=False)
-                return jsonify({
-                    'fallback': True,
-                    'direct_url': info.get('url'),
-                    'status': 'Bypassed queue due to storage constraints.'
-                })
-        except Exception as yt_err:
-            return jsonify({'error': f"Extraction failure: {str(yt_err)}"}), 500
-
+    task = process_download.apply_async(args=[data['url'], data['format_id'], data['title']])
+    return jsonify({'task_id': task.id})
 
 @app.route('/status/<task_id>')
 def task_status(task_id):
     task = process_download.AsyncResult(task_id)
-    if task.state == 'PENDING':
-        return jsonify({'state': task.state, 'percent': 0, 'status': 'IN QUEUE...'})
-    elif task.state == 'PROGRESS':
-        return jsonify({
-            'state': task.state,
-            'percent': task.info.get('percent', 0),
-            'status': task.info.get('status', 'PROCESSING...'),
-            'speed': task.info.get('speed', ''),
-            'eta': task.info.get('eta', '')
-        })
-    elif task.state == 'SUCCESS':
-        return jsonify({'state': task.state, 'percent': 100, 'filename': task.info.get('filename')})
-    elif task.state == 'FAILURE':
-        return jsonify({'state': task.state, 'error': str(task.info)})
-    return jsonify({'state': task.state})
-
+    return jsonify({'state': task.state, 'percent': task.info.get('percent') if isinstance(task.info, dict) else 0})
 
 @app.route('/download_file/<filename>')
 def download_file(filename):
-    file_path = os.path.join(DOWNLOAD_DIR, filename)
-    return send_file(file_path, as_attachment=True)
-
+    return send_file(os.path.join(DOWNLOAD_DIR, filename), as_attachment=True)
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
