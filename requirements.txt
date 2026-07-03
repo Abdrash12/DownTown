@@ -2,5 +2,5 @@ flask
 celery
 redis
 yt-dlp
-requests
+yt-dlp-ejs
 gunicorn
