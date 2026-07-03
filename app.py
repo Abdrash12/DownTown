@@ -11,27 +11,45 @@ app = Flask(__name__, template_folder='templates', static_folder='static')
 # 1. HARDENED CONFIGURATION & REDIS SETUP
 # ==========================================
 REDIS_URL = os.environ.get('REDIS_URL')
-PROXY_URL = os.environ.get('PROXY_URL')  # Format: http://username:password@endpoint:port
+PROXY_URL = os.environ.get('PROXY_URL')  
 
 if PROXY_URL:
     print(f"[BOOT] HTTP Proxy active: {PROXY_URL[:15]}****")
 else:
     print("[BOOT] WARNING: Running without proxy on datacenter IP!")
 
-app.config['broker_url'] = REDIS_URL
-app.config['result_backend'] = REDIS_URL
+# --- CONSOLIDATED UPSTASH REDIS & CELERY HARDENING ---
+app.config.update({
+    'broker_url': REDIS_URL,
+    'result_backend': REDIS_URL,
+    
+    # 1. Quota & Memory Protection
+    'result_expires': 600,                 # Delete results after 10 mins to save memory
+    'worker_send_task_events': False,      # Disable background monitoring spam to save command quota
+    'task_ignore_result': False,           # Maintained for explicit state checks
+    
+    # 2. Connection Resilience over Public TLS (Stops "Broken Pipe" CPU crashes)
+    'broker_connection_retry_on_startup': True,
+    'broker_connection_max_retries': 10,
+    'broker_pool_limit': 1,                # Limits open TCP sockets per worker to prevent limit exhaustion
+    
+    # 3. Socket Timeout Survival (Stops latency jitter from killing tasks)
+    'broker_transport_options': {
+        'socket_timeout': 30,              # Give Upstash 30s to respond during CPU spikes
+        'socket_connect_timeout': 30,
+        'socket_keepalive': True,          # Force OS-level TCP keepalive packets
+        'retry_on_timeout': True,          # Automatically retry cleanly if a socket drops
+        'max_connections': 10,             # Prevent connection pooling leaks
+    }
+})
 
-# --- REDIS OPTIMIZATIONS TO PROTECT UPSTASH QUOTA ---
-app.config['result_expires'] = 900  # Automatically delete task results from Redis after 15 mins
-app.config['worker_send_task_events'] = False  # Disable heartbeat monitoring spam to save command quota
-app.config['task_ignore_result'] = False  # Maintained for explicit state checks
-app.config['broker_connection_retry_on_startup'] = True
-
+# Initialize Celery exactly once with the consolidated configuration
 celery_app = Celery(app.name, broker=app.config['broker_url'])
 celery_app.conf.update(app.config)
 
 DOWNLOAD_DIR = os.path.join(os.getcwd(), 'downloads')
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
 
 # Detect FFmpeg location (Local Windows sandbox vs Render Linux container)
 local_exe = os.path.join(os.getcwd(), 'ffmpeg.exe')
