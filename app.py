@@ -4,9 +4,7 @@ from celery import Celery
 import yt_dlp
 
 app = Flask(__name__)
-@app.route('/')
-def index():
-    return render_template('index.html')
+
 # ==========================================
 # 1. CONFIGURATION
 # ==========================================
@@ -36,7 +34,7 @@ def process_download(self, url, format_id, title):
         'outtmpl': output_template,
         'merge_output_format': 'mp4',
         'quiet': True,
-        'proxy': PROXY_URL,
+        'proxy': PROXY_URL, # Using Webshare HTTP Proxy
         'js_runtimes': {'node': {}},
         'extractor_args': {'youtube': {'player_client': ['default', 'web', 'android', 'ios']}}
     }
@@ -51,10 +49,13 @@ def process_download(self, url, format_id, title):
 # ==========================================
 # 3. HTTP ENDPOINTS (WITH FALLBACK)
 # ==========================================
+@app.route('/')
+def index():
+    return render_template('index.html')
+
 @app.route('/trigger_download', methods=['POST'])
 def trigger_download():
     data = request.json
-    # Defensive check to prevent KeyError
     if not data or 'url' not in data:
         return jsonify({'error': 'Missing URL'}), 400
 
