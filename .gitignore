@@ -10,6 +10,7 @@ downloads/
 *.mp3
 ffmpeg.exe
 ffprobe.exe
+cookies.txt
 
 # Ignore OS files
 .DS_Store
