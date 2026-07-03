@@ -29,9 +29,9 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 local_exe = os.path.join(os.getcwd(), 'ffmpeg.exe')
 FFMPEG_PATH = local_exe if os.path.exists(local_exe) else 'ffmpeg'
 
-# Proxy configuration: Automatically uses the local Cloudflare WARP tunnel on Render,
-# or checks for a custom PROXY_URL environment variable.
-WARP_PROXY = os.environ.get('PROXY_URL', 'socks5://127.0.0.1:4000' if os.environ.get('RENDER') else None)
+# Proxy configuration: Reads your HTTP Webshare proxy cleanly from Render environment variables.
+# No legacy local SOCKS5 or port 4000 fallbacks!
+PROXY_URL = os.environ.get('PROXY_URL')
 
 
 # ==========================================
@@ -73,8 +73,8 @@ def process_download(self, url, format_id, title):
         'merge_output_format': 'mp4',
         'quiet': True,
         'ffmpeg_location': FFMPEG_PATH,
-        # Route through Cloudflare WARP to bypass AWS IP blocking
-        'proxy': WARP_PROXY,
+        # Route through external HTTP proxy (Webshare) to bypass AWS IP blocking
+        'proxy': PROXY_URL,
         # Uses Node.js to solve YouTube PO Token puzzles automatically
         'js_runtimes': {'node': {}},
         'progress_hooks': [progress_hook],
@@ -118,7 +118,7 @@ def fetch_metadata():
         'skip_download': True,
         'quiet': True,
         'ffmpeg_location': FFMPEG_PATH,
-        'proxy': WARP_PROXY,
+        'proxy': PROXY_URL,
         'js_runtimes': {'node': {}},
         'extractor_args': {
             'youtube': {
@@ -171,7 +171,7 @@ def trigger_download():
             'format': f"{data['format_id']}+bestaudio/{data['format_id']}/bestvideo+bestaudio/best",
             'skip_download': True,
             'quiet': True,
-            'proxy': WARP_PROXY,
+            'proxy': PROXY_URL,
             'js_runtimes': {'node': {}},
             'extractor_args': {
                 'youtube': {
