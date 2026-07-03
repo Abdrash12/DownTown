@@ -17,8 +17,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 5. Copy the rest of the application code
 COPY . .
 
+# NEW: Make the startup script executable
+RUN chmod +x start.sh
+
 # 6. Expose the port Flask runs on
 EXPOSE 5000
 
-# 7. Default command (Render will override this for the worker)
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "app:app"]
+# 7. Run the startup script instead of launching Gunicorn directly
+CMD ["./start.sh"]
