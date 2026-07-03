@@ -104,6 +104,13 @@ def process_download(self, url, format_id, title):
         'js_runtimes': {'deno': {}, 'node': {}, 'quickjs': {}},
         'progress_hooks': [progress_hook]
     }
+    # Add this inside your ydl_opts dictionary:
+        'extractor_args': {
+            'youtube': {
+                # Tells yt-dlp to pretend to be an iPhone, Android app, or TV player
+                'player_client': ['ios', 'android', 'tv', 'web']
+            }
+        },
     
     if COOKIES_PATH:
         ydl_opts['cookiefile'] = COOKIES_PATH
