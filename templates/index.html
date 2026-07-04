@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DownTown // Universal Downloader</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.4/socket.io.js"></script>
     <style>
         /* Base Comic Styling */
         body {
@@ -87,24 +86,11 @@
         .jp-matrix > span:nth-child(53n + 5) { animation: comic-pulse 4.9s ease-in-out infinite 0.5s; }
         .jp-matrix > span:nth-child(47n + 15) { animation: comic-pulse 5.9s ease-in-out infinite 1s; }
 
-        /* Hard YELLOW comic shadow pulses */
         @keyframes comic-pulse {
-            0%, 100% {
-                color: rgba(0, 0, 0, 0.05);
-                text-shadow: none;
-            }
-            30% {
-                color: #FFE600;
-                text-shadow: 2px 2px 0px #000;
-            }
-            50% {
-                color: #000;
-                text-shadow: 3px 3px 0px #FFE600;
-            }
-            70% {
-                color: #fff;
-                text-shadow: -2px -2px 0px #000;
-            }
+            0%, 100% { color: rgba(0, 0, 0, 0.05); text-shadow: none; }
+            30% { color: #FFE600; text-shadow: 2px 2px 0px #000; }
+            50% { color: #000; text-shadow: 3px 3px 0px #FFE600; }
+            70% { color: #fff; text-shadow: -2px -2px 0px #000; }
         }
 
         /* --- THE FOREGROUND CARD --- */
@@ -123,7 +109,7 @@
 
         .card:hover {
             transform: translate(-5px, -5px);
-            box-shadow: 17px 17px 0 #FFE600; /* Yellow Hover Shadow */
+            box-shadow: 17px 17px 0 #FFE600;
         }
 
         .card__title {
@@ -133,8 +119,6 @@
             text-transform: uppercase;
             margin-bottom: 15px;
             display: block;
-            position: relative;
-            overflow: hidden;
         }
 
         .card__form {
@@ -178,9 +162,8 @@
             width: 100%;
         }
 
-        /* Custom Comic-Book Progress Bar Container */
         .progress-box {
-            display: none; /* Hidden by default until download starts */
+            display: none;
             width: 100%;
             margin-top: 20px;
             border: 4px solid #000;
@@ -190,16 +173,14 @@
             overflow: hidden;
         }
 
-        /* The Animated Filling Bar */
         .progress-bar__fill {
             height: 40px;
             width: 0%;
-            background-color: #FFE600; /* Yellow fill to match your palette */
+            background-color: #FFE600;
             border-right: 4px solid #000;
             transition: width 0.1s ease-out;
         }
 
-        /* The Text Overlay inside the Bar */
         .progress-bar__text {
             position: absolute;
             top: 0;
@@ -223,11 +204,8 @@
         .card__button::before {
             content: "LET'S GO!";
             position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background-color: #FFE600; /* Yellow Slide Animation */
+            top: 0; left: 0; width: 100%; height: 100%;
+            background-color: #FFE600;
             color: #000;
             display: flex;
             align-items: center;
@@ -264,11 +242,7 @@
             font-size: 20px;
         }
 
-        #resDuration {
-            font-weight: bold;
-            margin: 0 0 15px 0;
-            text-transform: uppercase;
-        }
+        #resDuration { font-weight: bold; margin: 0 0 15px 0; text-transform: uppercase; }
 
         #statusText {
             margin-top: 15px;
@@ -289,7 +263,7 @@
 
         .glitch {
             display: none;
-            font-size: 20px;
+            font-size: 18px;
             font-weight: bold;
             text-transform: uppercase;
             animation: glitch 0.3s infinite;
@@ -324,9 +298,8 @@
             <button class="card__button" id="fetchBtn">Fetch / Process</button>
         </div>
 
-        <div id="statusText">INITIALIZING C2 CONNECTIONS...</div>
-
-        <div class="glitch" id="loader">PROCESSING MEDIA STREAM...</div>
+        <div id="statusText">STATUS: 100% CLIENT-SIDE ENGINE // RENDER IP HIDDEN</div>
+        <div class="glitch" id="loader">QUERYING FEDERATED RESOLVER NODES...</div>
 
         <div class="progress-box" id="progressBox">
             <div class="progress-bar__text" id="progressText">0% // READY IN BUFFER</div>
@@ -352,9 +325,6 @@
     </div>
 
     <script>
-        // Initialize real-time WebSocket connection to the Python signaling broker
-        const socket = io();
-        
         const statusText = document.getElementById('statusText');
         const fetchBtn = document.getElementById('fetchBtn');
         const videoUrlInput = document.getElementById('videoUrl');
@@ -362,91 +332,134 @@
         const resultCard = document.getElementById('resultCard');
         const downloadBtn = document.getElementById('downloadBtn');
         const selector = document.getElementById('formatSelector');
-        
         const progressBox = document.getElementById('progressBox');
         const progressFill = document.getElementById('progressFill');
         const progressText = document.getElementById('progressText');
         
-        let currentPayload = null;
+        let extractedFormats = [];
+        let currentTitle = "video";
 
-        // WebSocket State Event Bindings
-        socket.on('connect', () => {
-            statusText.innerText = 'STATUS: RELAY NODE ACTIVE // RESIDENTIAL EGRESS READY';
-            statusText.style.color = '#5ad641';
-        });
+        // Extract YouTube Video ID from any standard link format
+        function extractVideoID(url) {
+            const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
+            const match = url.match(regExp);
+            return (match && match[2].length === 11) ? match[2] : null;
+        }
 
-        socket.on('relay_progress', (data) => {
-            statusText.innerText = `STATUS: ${data.message}`;
-            statusText.style.color = '#666';
-        });
+        // FAILOVER ARRAY: Queries decentralized API nodes from the browser to bypass datacenter blocks
+        const RESOLVER_NODES = [
+            'https://pipedapi.kavin.rocks/streams/',
+            'https://api.piped.privacydev.net/streams/',
+            'https://piped-api.garudalinux.org/streams/',
+            'https://inv.tux.pizza/api/v1/videos/'
+        ];
 
-        socket.on('relay_error', (data) => {
-            loader.style.display = 'none';
-            alert('Relay Exception: ' + data.error);
-            statusText.innerText = 'STATUS: PIPELINE METADATA FAILURE';
-            statusText.style.color = '#ff0000';
-        });
+        async function fetchFromFederation(videoId) {
+            for (let i = 0; i < RESOLVER_NODES.length; i++) {
+                try {
+                    statusText.innerText = `STATUS: RESOLVING VIA NODE [${i+1}/${RESOLVER_NODES.length}]...`;
+                    const res = await fetch(`${RESOLVER_NODES[i]}${videoId}`);
+                    if (!res.ok) continue;
+                    const data = await res.json();
+                    if (data && (data.videoStreams || data.formatStreams)) {
+                        return data;
+                    }
+                } catch (err) {
+                    console.warn(`Node ${i+1} unreachable, silently hopping to next node...`);
+                }
+            }
+            throw new Error("All federated public nodes are temporarily busy. Try again in 5 seconds!");
+        }
 
-        // Triggered when backend transmits generated decryption map down the pipeline
-        socket.on('relay_success', (data) => {
-            currentPayload = data;
-            loader.style.display = 'none';
-            
-            document.getElementById('resThumb').src = data.thumbnail;
-            document.getElementById('resTitle').innerText = data.title;
-            document.getElementById('resDuration').innerText = `Duration: ${data.duration}s`;
-            
-            selector.innerHTML = '';
-            data.formats.forEach((f, index) => {
-                const opt = document.createElement('option');
-                opt.value = index;
-                // Formats the visibility to show notes along with calculated megabytes dynamically
-                opt.innerText = `${f.note} ${f.filesize ? '(' + (f.filesize / 1048576).toFixed(1) + ' MB)' : ''}`;
-                selector.appendChild(opt);
-            });
-
-            statusText.innerText = 'STATUS: SIGNED CDN SIGNATURES INJECTED INTO TARGET SELECTOR';
-            statusText.style.color = '#5ad641';
-            resultCard.style.display = 'grid';
-        });
-
-        // Dispatches processing signals via client actions
-        fetchBtn.addEventListener('click', () => {
+        fetchBtn.addEventListener('click', async () => {
             const url = videoUrlInput.value.trim();
-            if(!url) return alert('Paste a valid URL first!');
+            const videoId = extractVideoID(url);
+            if (!videoId) return alert("Please paste a valid YouTube link!");
 
             loader.style.display = 'block';
             resultCard.style.display = 'none';
             progressBox.style.display = 'none';
-            statusText.innerText = 'STATUS: BROADCASTING TARGET URL PACKET...';
+            statusText.style.color = '#000';
 
-            socket.emit('request_extraction', { url: url });
+            try {
+                // Client queries resolver node directly from residential IP
+                const data = await fetchFromFederation(videoId);
+                loader.style.display = 'none';
+
+                currentTitle = (data.title || "video").replace(/[^a-zA-Z0-9]/g, '_');
+                document.getElementById('resThumb').src = data.thumbnailUrl || `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
+                document.getElementById('resTitle').innerText = data.title || "YouTube Media";
+                document.getElementById('resDuration').innerText = `Duration: ${data.duration ? data.duration + 's' : 'Ready'}`;
+
+                selector.innerHTML = '';
+                extractedFormats = [];
+
+                // Parse Piped / Invidious CDN format arrays into our UI dropdown
+                const streams = data.videoStreams || data.formatStreams || [];
+                streams.forEach((stream) => {
+                    // Filter for MP4/progressive streams or high-bitrate video nodes
+                    if (stream.url && !stream.videoOnly) {
+                        const note = `${stream.quality || stream.resolution} - ${stream.format || 'MP4'}`;
+                        extractedFormats.push({ url: stream.url, note: note });
+                        
+                        const opt = document.createElement('option');
+                        opt.value = extractedFormats.length - 1;
+                        opt.innerText = note + " (Direct Audio+Video CDN)";
+                        selector.appendChild(opt);
+                    }
+                });
+
+                // Fallback: If node only returned DASH split formats, grab the highest quality video URLs
+                if (extractedFormats.length === 0 && streams.length > 0) {
+                    streams.slice(0, 4).forEach((stream) => {
+                        if (stream.url) {
+                            const note = `${stream.quality || 'HD'} (${stream.codec || 'MP4'})`;
+                            extractedFormats.push({ url: stream.url, note: note });
+                            const opt = document.createElement('option');
+                            opt.value = extractedFormats.length - 1;
+                            opt.innerText = note + " (Video CDN Stream)";
+                            selector.appendChild(opt);
+                        }
+                    });
+                }
+
+                if (extractedFormats.length === 0) throw new Error("No direct CDN links returned for this video.");
+
+                statusText.innerText = 'STATUS: RESOLUTION SUCCESS // DIRECT GOOGLE CDN NODES SECURED';
+                statusText.style.color = '#5ad641';
+                resultCard.style.display = 'grid';
+
+            } catch (err) {
+                loader.style.display = 'none';
+                alert('Extraction error: ' + err.message);
+                statusText.innerText = 'STATUS: RESOLVER PIPELINE BUSY';
+                statusText.style.color = '#ff0000';
+            }
         });
 
-        // Distributed Client Egress Core Module (Zero Render Server Overhead)
+        // 100% Client-Side Egress Execution (Zero Render Server Overhead)
         downloadBtn.addEventListener('click', async () => {
             const selectedIdx = selector.value;
-            const targetNode = currentPayload.formats[selectedIdx];
-            if(!targetNode) return alert('Select format parameter missing!');
+            const targetNode = extractedFormats[selectedIdx];
+            if (!targetNode) return alert("Select a valid format!");
 
             progressBox.style.display = 'block';
             progressFill.style.width = '5%';
             progressFill.style.backgroundColor = '#FFE600';
-            statusText.innerText = 'STATUS: ATTACHING STREAM READERS TO GOOGLE NODES...';
+            statusText.innerText = 'STATUS: INITIATING RESIDENTIAL DOWNLINK TO GOOGLE CDN...';
 
             try {
-                // Client fires fetch natively via their own residential host network pipeline
-                const response = await fetch(targetNode.cdn_url);
-                if (!response.ok) throw new Error(`CDN Node HTTP error! Status: ${response.status}`);
+                // Because this request originates from the user's home IP, Google CDN serves at 100% speed!
+                const response = await fetch(targetNode.url);
+                if (!response.ok) throw new Error(`HTTP Error ${response.status}`);
 
-                const contentLength = response.headers.get('content-length') || targetNode.filesize;
+                const contentLength = response.headers.get('content-length');
                 const totalBytes = parseInt(contentLength, 10);
                 let loadedBytes = 0;
 
                 const reader = response.body.getReader();
                 const chunks = [];
 
-                // Sequential buffer streaming capture loop
                 while (true) {
                     const { done, value } = await reader.read();
                     if (done) break;
@@ -457,42 +470,40 @@
                     if (totalBytes > 0) {
                         const percent = Math.floor((loadedBytes / totalBytes) * 100);
                         progressFill.style.width = `${percent}%`;
-                        progressText.innerText = `${percent}% // RUNNING CLIENT PIPELINE`;
-                        statusText.innerText = `STATUS: STREAMING FROM GOOGLE CDN // NODE DATA: ${(loadedBytes / 1048576).toFixed(1)} / ${(totalBytes / 1048576).toFixed(1)} MB`;
+                        progressText.innerText = `${percent}% // CLIENT PIPELINE RUNNING`;
+                        statusText.innerText = `STATUS: DOWNLOADING VIA HOME ISP // ${(loadedBytes / 1048576).toFixed(1)} / ${(totalBytes / 1048576).toFixed(1)} MB`;
                     } else {
-                        statusText.innerText = `STATUS: CAPTURING FRAGMENTS // ${(loadedBytes / 1048576).toFixed(1)} MB STREAMED`;
+                        statusText.innerText = `STATUS: DOWNLOADING // ${(loadedBytes / 1048576).toFixed(1)} MB RECEIVED...`;
                     }
                 }
 
-                statusText.innerText = 'STATUS: COMPILING FRAGMENTS INSIDE CLIENT VIRTUAL MEMORY...';
+                statusText.innerText = 'STATUS: STITCHING BINARY BLOB IN BROWSER MEMORY...';
                 progressText.innerText = '95% // ASSEMBLING BLOB';
                 
-                // Package chunks into an isolated binary large object block
                 const finalBlob = new Blob(chunks, { type: 'video/mp4' });
                 const blobUrl = URL.createObjectURL(finalBlob);
 
-                // Emits a high speed synthetic trigger to auto-save file onto operating system drives
                 const downloadLink = document.createElement('a');
                 downloadLink.href = blobUrl;
-                downloadLink.download = `${currentPayload.title}.mp4`;
+                downloadLink.download = `${currentTitle}.mp4`;
                 document.body.appendChild(downloadLink);
                 downloadLink.click();
                 document.body.removeChild(downloadLink);
 
                 progressFill.style.width = '100%';
-                progressFill.style.backgroundColor = '#5ad641'; // Turns success green instantly
-                progressText.innerText = '100% // PIPELINE RESOLVED SUCCESSFULLY';
-                statusText.innerText = 'STATUS: WORKER DISCHARGED // FILE CONVERTED';
+                progressFill.style.backgroundColor = '#5ad641';
+                progressText.innerText = '100% // DOWNLOAD COMPLETE';
+                statusText.innerText = 'STATUS: SUCCESS // FILE CONVERTED VIA CLIENT PIPELINE';
 
             } catch (err) {
-                console.warn("CORS/Security boundaries prevented low-level parsing. Triggering fallback configuration...", err);
-                statusText.innerText = 'STATUS: CORS ESCALATION REDIRECTION TRIGGERED...';
-                progressText.innerText = 'REDIRECTING TO DIRECT PIPELINE WINDOW';
+                console.warn("CORS boundary restricted chunk streaming. Executing direct native download...", err);
+                statusText.innerText = 'STATUS: REDIRECTING TO DIRECT CDN WINDOW...';
+                progressText.innerText = 'HANDING OVER TO NATIVE BROWSER DOWNLOADER';
                 progressFill.style.width = '100%';
-                progressFill.style.backgroundColor = '#FFE600';
+                progressFill.style.backgroundColor = '#5ad641';
                 
-                // Direct emergency fallback routing in case target device context restricts reader interception
-                window.location.href = targetNode.cdn_url;
+                // If browser CORS policy prevents low-level chunk interception, natively download link
+                window.location.href = targetNode.url;
             }
 
             setTimeout(() => {
