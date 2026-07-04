@@ -19,5 +19,5 @@ COPY . .
 # Expose Flask's default port
 EXPOSE 5000
 
-# Run the production server with an extended timeout for long video streams
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "app:app", "--timeout", "120", "--workers", "2"]
+# Run the production server with an extended timeout for long video streams# Run Gunicorn with the eventlet async worker for high-speed WebSocket signaling
+CMD ["gunicorn", "--worker-class", "eventlet", "-w", "1", "--bind", "0.0.0.0:5000", "app:app", "--timeout", "120"]
