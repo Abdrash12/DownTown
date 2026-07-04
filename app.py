@@ -14,8 +14,8 @@ YTDL_BASE_ARGS = [
     '--no-warnings',
     '--no-playlist',
     '--socket-timeout', '15',
-    '--remote-components', 'ejs:npm',
-    '--proxy', WARP_PROXY,  # <-- THIS BYPASSES RENDER'S 429 DATACENTER BLOCKS NATIVELY
+    '--remote-components', 'ejs:github',  # <-- FIXED: Tells yt-dlp to use official GitHub solvers
+    '--proxy', WARP_PROXY,                # <-- Routes out through your free Cloudflare WARP tunnel
     '--concurrent-fragments', '8',
     '--extractor-args', 'youtube:player_client=android_vr,web_safari,web_embedded,default;player_skip=web,ios,mweb,tv'
 ]
@@ -38,8 +38,8 @@ def fetch_metadata():
         opts = {
             'quiet': True,
             'skip_download': True,
-            'proxy': WARP_PROXY,  # <-- ROUTE METADATA FETCH THROUGH WARP TUNNEL
-            'remote_components': ['ejs:npm'],
+            'proxy': WARP_PROXY,
+            'remote_components': ['ejs:github'], # <-- FIXED HERE TOO
             'extractor_args': {
                 'youtube': {
                     'player_client': ['android_vr', 'web_safari', 'web_embedded', 'default'],
