@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DownTown // Universal Downloader</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.4/socket.io.js"></script>
     <style>
         /* Base Comic Styling */
         body {
@@ -151,6 +152,8 @@
             transition: transform 0.3s, background-color 0.3s, color 0.3s;
             width: 100%;
             box-sizing: border-box;
+            background-color: #fff;
+            color: #000;
         }
 
         .card__form input:focus, .card__form select:focus {
@@ -171,7 +174,7 @@
             cursor: pointer;
             position: relative;
             overflow: hidden;
-            transition: transform 0.3s;
+            transition: transform 0.3s, background-color 0.3s, color 0.3s;
             width: 100%;
         }
 
@@ -193,7 +196,7 @@
             width: 0%;
             background-color: #FFE600; /* Yellow fill to match your palette */
             border-right: 4px solid #000;
-            transition: width 0.4s ease-in-out;
+            transition: width 0.1s ease-out;
         }
 
         /* The Text Overlay inside the Bar */
@@ -207,11 +210,14 @@
             align-items: center;
             justify-content: center;
             font-weight: 900;
-            font-size: 16px;
+            font-size: 14px;
             text-transform: uppercase;
             color: #000;
             z-index: 2;
             text-shadow: 1px 1px 0 #fff;
+            padding: 0 10px;
+            box-sizing: border-box;
+            text-align: center;
         }
 
         .card__button::before {
@@ -255,6 +261,22 @@
         .info-box h3 {
             margin: 0 0 10px 0;
             text-transform: uppercase;
+            font-size: 20px;
+        }
+
+        #resDuration {
+            font-weight: bold;
+            margin: 0 0 15px 0;
+            text-transform: uppercase;
+        }
+
+        #statusText {
+            margin-top: 15px;
+            font-size: 13px;
+            font-weight: bold;
+            text-transform: uppercase;
+            color: #666;
+            text-align: center;
         }
 
         @keyframes glitch {
@@ -276,6 +298,7 @@
             color: #FFE600;
             padding: 10px;
             text-align: center;
+            border: 4px solid #000;
         }
     </style>
 </head>
@@ -301,10 +324,12 @@
             <button class="card__button" id="fetchBtn">Fetch / Process</button>
         </div>
 
+        <div id="statusText">INITIALIZING C2 CONNECTIONS...</div>
+
         <div class="glitch" id="loader">PROCESSING MEDIA STREAM...</div>
 
         <div class="progress-box" id="progressBox">
-            <div class="progress-bar__text" id="progressText">0% // IN QUEUE...</div>
+            <div class="progress-bar__text" id="progressText">0% // READY IN BUFFER</div>
             <div class="progress-bar__fill" id="progressFill"></div>
         </div>
 
@@ -318,83 +343,162 @@
                 
                 <div class="card__form">
                     <select id="formatSelector"></select>
-                    <button class="card__button" id="downloadBtn" style="background: #FFE600; color: #000; border-color: #000;">Download</button>
+                    <button class="card__button" id="downloadBtn" style="background: #FFE600; color: #000; border-color: #000;">
+                        Download Video
+                    </button>
                 </div>
             </div>
         </div>
     </div>
-<script>
+
+    <script>
+        // Initialize real-time WebSocket connection to the Python signaling broker
+        const socket = io();
+        
+        const statusText = document.getElementById('statusText');
         const fetchBtn = document.getElementById('fetchBtn');
         const videoUrlInput = document.getElementById('videoUrl');
         const loader = document.getElementById('loader');
         const resultCard = document.getElementById('resultCard');
         const downloadBtn = document.getElementById('downloadBtn');
+        const selector = document.getElementById('formatSelector');
+        
         const progressBox = document.getElementById('progressBox');
         const progressFill = document.getElementById('progressFill');
         const progressText = document.getElementById('progressText');
         
-        let currentMetadata = null;
+        let currentPayload = null;
 
-        fetchBtn.addEventListener('click', async () => {
+        // WebSocket State Event Bindings
+        socket.on('connect', () => {
+            statusText.innerText = 'STATUS: RELAY NODE ACTIVE // RESIDENTIAL EGRESS READY';
+            statusText.style.color = '#5ad641';
+        });
+
+        socket.on('relay_progress', (data) => {
+            statusText.innerText = `STATUS: ${data.message}`;
+            statusText.style.color = '#666';
+        });
+
+        socket.on('relay_error', (data) => {
+            loader.style.display = 'none';
+            alert('Relay Exception: ' + data.error);
+            statusText.innerText = 'STATUS: PIPELINE METADATA FAILURE';
+            statusText.style.color = '#ff0000';
+        });
+
+        // Triggered when backend transmits generated decryption map down the pipeline
+        socket.on('relay_success', (data) => {
+            currentPayload = data;
+            loader.style.display = 'none';
+            
+            document.getElementById('resThumb').src = data.thumbnail;
+            document.getElementById('resTitle').innerText = data.title;
+            document.getElementById('resDuration').innerText = `Duration: ${data.duration}s`;
+            
+            selector.innerHTML = '';
+            data.formats.forEach((f, index) => {
+                const opt = document.createElement('option');
+                opt.value = index;
+                // Formats the visibility to show notes along with calculated megabytes dynamically
+                opt.innerText = `${f.note} ${f.filesize ? '(' + (f.filesize / 1048576).toFixed(1) + ' MB)' : ''}`;
+                selector.appendChild(opt);
+            });
+
+            statusText.innerText = 'STATUS: SIGNED CDN SIGNATURES INJECTED INTO TARGET SELECTOR';
+            statusText.style.color = '#5ad641';
+            resultCard.style.display = 'grid';
+        });
+
+        // Dispatches processing signals via client actions
+        fetchBtn.addEventListener('click', () => {
             const url = videoUrlInput.value.trim();
             if(!url) return alert('Paste a valid URL first!');
 
             loader.style.display = 'block';
             resultCard.style.display = 'none';
             progressBox.style.display = 'none';
+            statusText.innerText = 'STATUS: BROADCASTING TARGET URL PACKET...';
 
-            try {
-                const response = await fetch('/fetch', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ url: url })
-                });
-                
-                const data = await response.json();
-                loader.style.display = 'none';
-
-                if(data.error) {
-                    alert('Error: ' + data.error);
-                } else {
-                    currentMetadata = data;
-                    document.getElementById('resThumb').src = data.thumbnail;
-                    document.getElementById('resTitle').innerText = data.title;
-                    document.getElementById('resDuration').innerText = `Duration: ${data.duration}s`;
-                    
-                    const selector = document.getElementById('formatSelector');
-                    selector.innerHTML = '';
-                    
-                    data.formats.forEach(f => {
-                        const opt = document.createElement('option');
-                        opt.value = f.format_id; 
-                        opt.innerText = f.note;
-                        selector.appendChild(opt);
-                    });
-
-                    resultCard.style.display = 'grid';
-                }
-            } catch (err) {
-                loader.style.display = 'none';
-                alert('Connection failure loading media details.');
-            }
+            socket.emit('request_extraction', { url: url });
         });
 
-        downloadBtn.addEventListener('click', () => {
-            const selectedFormat = document.getElementById('formatSelector').value;
-            if(!selectedFormat) return alert("Select a valid format first!");
-            
-            progressBox.style.display = 'block';
-            progressFill.style.width = '100%';
-            progressFill.style.backgroundColor = '#5ad641';
-            progressText.innerText = 'TUNNELING HIGH-SPEED STREAM... CHECK DOWNLOADS';
+        // Distributed Client Egress Core Module (Zero Render Server Overhead)
+        downloadBtn.addEventListener('click', async () => {
+            const selectedIdx = selector.value;
+            const targetNode = currentPayload.formats[selectedIdx];
+            if(!targetNode) return alert('Select format parameter missing!');
 
-            // Point browser to our new multi-threaded subprocess tunnel
-            const tunnelUrl = `/tunnel_download?url=${encodeURIComponent(currentMetadata.original_url)}&format_id=${encodeURIComponent(selectedFormat)}&title=${encodeURIComponent(currentMetadata.title)}`;
-            window.location.href = tunnelUrl;
+            progressBox.style.display = 'block';
+            progressFill.style.width = '5%';
+            progressFill.style.backgroundColor = '#FFE600';
+            statusText.innerText = 'STATUS: ATTACHING STREAM READERS TO GOOGLE NODES...';
+
+            try {
+                // Client fires fetch natively via their own residential host network pipeline
+                const response = await fetch(targetNode.cdn_url);
+                if (!response.ok) throw new Error(`CDN Node HTTP error! Status: ${response.status}`);
+
+                const contentLength = response.headers.get('content-length') || targetNode.filesize;
+                const totalBytes = parseInt(contentLength, 10);
+                let loadedBytes = 0;
+
+                const reader = response.body.getReader();
+                const chunks = [];
+
+                // Sequential buffer streaming capture loop
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    
+                    chunks.push(value);
+                    loadedBytes += value.length;
+
+                    if (totalBytes > 0) {
+                        const percent = Math.floor((loadedBytes / totalBytes) * 100);
+                        progressFill.style.width = `${percent}%`;
+                        progressText.innerText = `${percent}% // RUNNING CLIENT PIPELINE`;
+                        statusText.innerText = `STATUS: STREAMING FROM GOOGLE CDN // NODE DATA: ${(loadedBytes / 1048576).toFixed(1)} / ${(totalBytes / 1048576).toFixed(1)} MB`;
+                    } else {
+                        statusText.innerText = `STATUS: CAPTURING FRAGMENTS // ${(loadedBytes / 1048576).toFixed(1)} MB STREAMED`;
+                    }
+                }
+
+                statusText.innerText = 'STATUS: COMPILING FRAGMENTS INSIDE CLIENT VIRTUAL MEMORY...';
+                progressText.innerText = '95% // ASSEMBLING BLOB';
+                
+                // Package chunks into an isolated binary large object block
+                const finalBlob = new Blob(chunks, { type: 'video/mp4' });
+                const blobUrl = URL.createObjectURL(finalBlob);
+
+                // Emits a high speed synthetic trigger to auto-save file onto operating system drives
+                const downloadLink = document.createElement('a');
+                downloadLink.href = blobUrl;
+                downloadLink.download = `${currentPayload.title}.mp4`;
+                document.body.appendChild(downloadLink);
+                downloadLink.click();
+                document.body.removeChild(downloadLink);
+
+                progressFill.style.width = '100%';
+                progressFill.style.backgroundColor = '#5ad641'; // Turns success green instantly
+                progressText.innerText = '100% // PIPELINE RESOLVED SUCCESSFULLY';
+                statusText.innerText = 'STATUS: WORKER DISCHARGED // FILE CONVERTED';
+
+            } catch (err) {
+                console.warn("CORS/Security boundaries prevented low-level parsing. Triggering fallback configuration...", err);
+                statusText.innerText = 'STATUS: CORS ESCALATION REDIRECTION TRIGGERED...';
+                progressText.innerText = 'REDIRECTING TO DIRECT PIPELINE WINDOW';
+                progressFill.style.width = '100%';
+                progressFill.style.backgroundColor = '#FFE600';
+                
+                // Direct emergency fallback routing in case target device context restricts reader interception
+                window.location.href = targetNode.cdn_url;
+            }
 
             setTimeout(() => {
                 progressBox.style.display = 'none';
-            }, 4000);
+            }, 6000);
         });
-    </script></body>
+    </script>
+</body>
 </html>
