@@ -5,7 +5,8 @@ from flask import Flask, render_template, request, jsonify, Response
 
 app = Flask(__name__, template_folder='templates', static_folder='static')
 
-# We pass --cookies so Render's cloud datacenter IP doesn't get blocked by YouTube BotGuard!
+# 1. TUNNEL ARGS: We remove --cookies here so the Android API is NOT skipped.
+# Android natively bypasses Render's 429 Datacenter Rate Limits!
 YTDL_BASE_ARGS = [
     sys.executable, '-m', 'yt_dlp',
     '--quiet',
@@ -13,9 +14,8 @@ YTDL_BASE_ARGS = [
     '--no-playlist',
     '--socket-timeout', '15',
     '--remote-components', 'ejs:github',
-    '--cookies', 'cookies.txt',  # <-- THIS PARSE LINE SAVES RENDER FROM 403 / BOT BLOCKS
     '--concurrent-fragments', '8',
-    '--extractor-args', 'youtube:player_client=android,web_embedded,default;player_skip=web,ios,mweb,tv'
+    '--extractor-args', 'youtube:player_client=android,web_embedded,tv_embedded,default;player_skip=web,ios,mweb'
 ]
 
 @app.route('/')
@@ -33,13 +33,17 @@ def fetch_metadata():
     
     try:
         import yt_dlp
-        # We must pass cookiefile here too so metadata fetching doesn't throw the bot error
+        # 2. METADATA OPTS: No cookiefile parameter here so Android works cleanly
         opts = {
             'quiet': True,
             'skip_download': True,
-            'cookiefile': 'cookies.txt',  # <-- AUTHORIZES METADATA SCRAPING ON RENDER
             'remote_components': ['ejs:github'],
-            'extractor_args': {'youtube': {'player_client': ['android', 'web_embedded', 'default']}}
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android', 'web_embedded', 'tv_embedded', 'default'],
+                    'player_skip': ['web', 'ios', 'mweb']
+                }
+            }
         }
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -79,10 +83,6 @@ def fetch_metadata():
 
 @app.route('/tunnel_download')
 def tunnel_download():
-    """
-    Spawns yt-dlp with 8 concurrent threads using your cookies.txt to bypass datacenter blocks,
-    piping the high-speed MP4 stream directly to the user's browser.
-    """
     url = request.args.get('url')
     format_id = request.args.get('format_id', 'best')
     title = request.args.get('title', 'video').replace(' ', '_')
@@ -101,7 +101,7 @@ def tunnel_download():
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            bufsize=10**7  # 10MB memory buffer for maximum transfer throughput
+            bufsize=10**7
         )
         try:
             while True:
