@@ -1,24 +1,38 @@
-# Use the lightweight Python slim image to keep build sizes tiny
-FROM python:3.14-slim
+FROM python:3.11-slim
 
-# Prevents Python from writing pyc files to disc and keeps stdout unbuffered for clean logs
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# Set the working directory inside the container
+# Install system dependencies, Node.js, and curl/wget
+RUN apt-get update && apt-get install -y \
+    curl \
+    wget \
+    && curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
-# Copy requirements first to leverage Docker layer caching (fast rebuilds!)
+# Install Python dependencies and pre-compile the EJS signature solver via NPM
 COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt && npm install -g yt-dlp-ejs
 
-# Install dependencies cleanly without storing build cache
-RUN pip install --no-cache-dir -r requirements.txt
+# Install wgcf (Automated Cloudflare WARP registration CLI)
+RUN wget -q https://github.com/ViRb3/wgcf/releases/download/v2.2.22/wgcf_2.2.22_linux_amd64 -O /usr/local/bin/wgcf \
+    && chmod +x /usr/local/bin/wgcf
 
-# Copy your app.py and your templates/ folder into the container
+# Install wireproxy (User-space WireGuard client that outputs to a SOCKS5 port)
+RUN wget -q https://github.com/pufferffish/wireproxy/releases/download/v1.0.9/wireproxy_linux_amd64.tar.gz \
+    && tar -xzf wireproxy_linux_amd64.tar.gz -C /usr/local/bin/ \
+    && rm wireproxy_linux_amd64.tar.gz \
+    && chmod +x /usr/local/bin/wireproxy
+
 COPY . .
 
-# Expose port 5000 for web traffic
+# Ensure the bootloader script is executable
+RUN chmod +x start.sh
+
 EXPOSE 5000
 
-# Launch Gunicorn with lightweight sync workers (since we are only serving web pages!)
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "app:app", "--workers", "2", "--threads", "4", "--access-logfile", "-"]
+# Execute our automated WARP tunnel startup script
+CMD ["./start.sh"]
