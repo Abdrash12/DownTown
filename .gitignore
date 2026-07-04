@@ -1,18 +1,6 @@
-# Ignore local virtual environment
-venv/
-.venv/
 __pycache__/
 *.pyc
-
-# Ignore local media & executables
-downloads/
-*.mp4
-*.mp3
-ffmpeg.exe
-ffprobe.exe
-cookies.txt
-render_cookies.txt
-
-# Ignore OS files
-.DS_Store
-Thumbs.db
+.env
+venv/
+.venv
+instance/
