@@ -3,7 +3,7 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# Install system dependencies, Node.js, and curl/wget
+# Install system dependencies, Node.js runtime (required for EJS solving), and curl/wget
 RUN apt-get update && apt-get install -y \
     curl \
     wget \
@@ -13,9 +13,9 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Install Python dependencies and pre-compile the EJS signature solver via NPM
+# Install Python dependencies cleanly without the fake npm package!
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt && npm install -g yt-dlp-ejs
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Install wgcf (Automated Cloudflare WARP registration CLI)
 RUN wget -q https://github.com/ViRb3/wgcf/releases/download/v2.2.22/wgcf_2.2.22_linux_amd64 -O /usr/local/bin/wgcf \
