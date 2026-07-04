@@ -1,23 +1,24 @@
+# Use the lightweight Python slim image to keep build sizes tiny
 FROM python:3.11-slim
 
-# Install Node.js (Required by yt-dlp to solve the 'n' parameter speed cipher)
-RUN apt-get update && apt-get install -y \
-    curl \
-    && curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
-    && apt-get install -y nodejs \
-    && rm -rf /var/lib/apt/lists/*
+# Prevents Python from writing pyc files to disc and keeps stdout unbuffered for clean logs
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
+# Set the working directory inside the container
 WORKDIR /app
 
-# Install Python dependencies
+# Copy requirements first to leverage Docker layer caching (fast rebuilds!)
 COPY requirements.txt .
+
+# Install dependencies cleanly without storing build cache
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of your application code
+# Copy your app.py and your templates/ folder into the container
 COPY . .
 
-# Expose Flask's default port
+# Expose port 5000 for web traffic
 EXPOSE 5000
 
-# Run the production server with an extended timeout for long video streams# Run Gunicorn with the eventlet async worker for high-speed WebSocket signaling
-CMD ["gunicorn", "--worker-class", "eventlet", "-w", "1", "--bind", "0.0.0.0:5000", "app:app", "--timeout", "120"]
+# Launch Gunicorn with lightweight sync workers (since we are only serving web pages!)
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "app:app", "--workers", "2", "--threads", "4", "--access-logfile", "-"]
