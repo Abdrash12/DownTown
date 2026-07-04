@@ -1,17 +1,19 @@
 import os
+import sys
 import subprocess
 from flask import Flask, render_template, request, jsonify, Response
 
 app = Flask(__name__, template_folder='templates', static_folder='static')
 
-# We use the native command-line engine to handle SABR chunking and multi-threading natively
+# We pass --cookies so Render's cloud datacenter IP doesn't get blocked by YouTube BotGuard!
 YTDL_BASE_ARGS = [
-    'yt-dlp',
+    sys.executable, '-m', 'yt_dlp',
+    '--quiet',
     '--no-warnings',
     '--no-playlist',
     '--socket-timeout', '15',
     '--remote-components', 'ejs:github',
-    # Force yt-dlp to use its internal concurrent downloader to bypass per-stream caps
+    '--cookies', 'cookies.txt',  # <-- THIS PARSE LINE SAVES RENDER FROM 403 / BOT BLOCKS
     '--concurrent-fragments', '8',
     '--extractor-args', 'youtube:player_client=android,web_embedded,default;player_skip=web,ios,mweb,tv'
 ]
@@ -31,10 +33,11 @@ def fetch_metadata():
     
     try:
         import yt_dlp
-        # Fast metadata extraction without triggering token blocks
+        # We must pass cookiefile here too so metadata fetching doesn't throw the bot error
         opts = {
             'quiet': True,
             'skip_download': True,
+            'cookiefile': 'cookies.txt',  # <-- AUTHORIZES METADATA SCRAPING ON RENDER
             'remote_components': ['ejs:github'],
             'extractor_args': {'youtube': {'player_client': ['android', 'web_embedded', 'default']}}
         }
@@ -77,8 +80,8 @@ def fetch_metadata():
 @app.route('/tunnel_download')
 def tunnel_download():
     """
-    Instead of giving the browser a throttled Google link, we let yt-dlp download 
-    with 8 concurrent threads and pipe the high-speed stream directly to the browser.
+    Spawns yt-dlp with 8 concurrent threads using your cookies.txt to bypass datacenter blocks,
+    piping the high-speed MP4 stream directly to the user's browser.
     """
     url = request.args.get('url')
     format_id = request.args.get('format_id', 'best')
@@ -87,7 +90,6 @@ def tunnel_download():
     if not url:
         return "Missing URL", 400
 
-    # Build the native command to output data directly to stdout (-)
     cmd = YTDL_BASE_ARGS + [
         '-f', format_id,
         '-o', '-', 
@@ -95,7 +97,6 @@ def tunnel_download():
     ]
 
     def generate():
-        # Spawn yt-dlp as a high-speed background subprocess
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -104,7 +105,6 @@ def tunnel_download():
         )
         try:
             while True:
-                # Read large 1MB chunks from yt-dlp's multi-threaded buffer
                 chunk = process.stdout.read(1048576)
                 if not chunk:
                     break
