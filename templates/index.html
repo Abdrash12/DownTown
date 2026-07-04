@@ -334,7 +334,6 @@
         const progressText = document.getElementById('progressText');
         
         let currentMetadata = null;
-        let activePollTimer = null; // GLOBAL CONTROLLER: Prevents duplicate polling loops!
 
         fetchBtn.addEventListener('click', async () => {
             const url = videoUrlInput.value.trim();
@@ -343,7 +342,6 @@
             loader.style.display = 'block';
             resultCard.style.display = 'none';
             progressBox.style.display = 'none';
-            if (activePollTimer) clearInterval(activePollTimer); // Kill active polling on new fetch
 
             try {
                 const response = await fetch('/fetch', {
@@ -361,13 +359,14 @@
                     currentMetadata = data;
                     document.getElementById('resThumb').src = data.thumbnail;
                     document.getElementById('resTitle').innerText = data.title;
-                    document.getElementById('resDuration').innerText = `Duration: ${data.duration}`;
+                    document.getElementById('resDuration').innerText = `Duration: ${data.duration}s`;
                     
                     const selector = document.getElementById('formatSelector');
                     selector.innerHTML = '';
+                    
                     data.formats.forEach(f => {
                         const opt = document.createElement('option');
-                        opt.value = f.format_id;
+                        opt.value = f.format_id; 
                         opt.innerText = f.note;
                         selector.appendChild(opt);
                     });
@@ -376,115 +375,26 @@
                 }
             } catch (err) {
                 loader.style.display = 'none';
-                alert('Connection failure.');
+                alert('Connection failure loading media details.');
             }
         });
 
-        downloadBtn.addEventListener('click', async () => {
-            if(!currentMetadata) return;
-            
-            // KILL SWITCH: Clear any existing timers before starting a new download!
-            if (activePollTimer) {
-                clearInterval(activePollTimer);
-                activePollTimer = null;
-            }
-
+        downloadBtn.addEventListener('click', () => {
             const selectedFormat = document.getElementById('formatSelector').value;
+            if(!selectedFormat) return alert("Select a valid format first!");
             
-            loader.style.display = 'none';
             progressBox.style.display = 'block';
-            progressFill.style.width = '0%';
-            progressFill.style.backgroundColor = '#FFE600'; // Ensure default yellow/accent color
-            progressText.innerText = '0% // INITIATING CONNECTION...';
-            
-            downloadBtn.disabled = true;
+            progressFill.style.width = '100%';
+            progressFill.style.backgroundColor = '#5ad641';
+            progressText.innerText = 'TUNNELING HIGH-SPEED STREAM... CHECK DOWNLOADS';
 
-            try {
-                const response = await fetch('/trigger_download', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        url: currentMetadata.original_url,
-                        format_id: selectedFormat,
-                        title: currentMetadata.title
-                    })
-                });
-                
-                const data = await response.json();
-                
-                // --- CASE 1: REDIS IS OFFLINE -> INSTANT CLIENT-SIDE CDN FALLBACK ---
-            // --- CASE 1: REDIS IS OFFLINE -> 0-RAM CHUNKED PIPE FALLBACK ---
-                if (data.fallback && data.stream_url) {
-                    progressFill.style.width = '100%';
-                    progressFill.style.backgroundColor = '#5ad641';
-                    progressText.innerText = '100% // QUEUE BYPASSED. PIPING STREAM...';
-                    
-                    setTimeout(() => {
-                        progressBox.style.display = 'none';
-                        downloadBtn.disabled = false;
-                        // Routes through your safe server pipe to prevent Google 403 errors
-                        window.location.href = data.stream_url;
-                    }, 1500);
-                    return; 
-                }
-                // --- CASE 2: REDIS ACTIVE -> POLL WORKER EVERY 3 SECONDS ---
-                activePollTimer = setInterval(async () => {
-                    try {
-                        const statusRes = await fetch(`/status/${data.task_id}`);
-                        const statusData = await statusRes.json();
+            // Point browser to our new multi-threaded subprocess tunnel
+            const tunnelUrl = `/tunnel_download?url=${encodeURIComponent(currentMetadata.original_url)}&format_id=${encodeURIComponent(selectedFormat)}&title=${encodeURIComponent(currentMetadata.title)}`;
+            window.location.href = tunnelUrl;
 
-                        if (statusData.state === 'PROGRESS') {
-                            const percent = statusData.percent || 0;
-                            
-                            if (percent === -1) {
-                                // Indeterminate size: Pulse UI at 50% instead of freezing at 0%
-                                progressFill.style.width = '50%';
-                                progressText.innerText = `[STREAMING] // ${statusData.status}`;
-                            } else {
-                                progressFill.style.width = `${percent}%`;
-                                progressText.innerText = `${percent}% // ${statusData.status}`;
-                            }
-                        
-                        // NEW: Handles the 15-20 second proxy handshake wait without looking "frozen"
-                        } else if (statusData.state === 'PENDING') {
-                            progressFill.style.width = '10%';
-                            progressText.innerText = `[QUEUE] // ${statusData.status || 'SOLVING PROXY CHALLENGE...'}`;
-                            
-                        } else if (statusData.state === 'SUCCESS') {
-                            clearInterval(activePollTimer);
-                            activePollTimer = null;
-                            
-                            progressFill.style.width = '100%';
-                            progressFill.style.backgroundColor = '#5ad641';
-                            progressText.innerText = '100% // DOWNLOAD COMPLETE!';
-                            downloadBtn.disabled = false;
-                            
-                            setTimeout(() => {
-                                progressBox.style.display = 'none';
-                                progressFill.style.backgroundColor = '#FFE600';
-                                window.location.href = `/download_file/${statusData.filename}`;
-                            }, 2000);
-                            
-                        } else if (statusData.state === 'FAILURE') {
-                            clearInterval(activePollTimer);
-                            activePollTimer = null;
-                            
-                            alert('Worker Failed: ' + (statusData.error || 'Unknown Error'));
-                            progressBox.style.display = 'none';
-                            downloadBtn.disabled = false;
-                        }
-                    } catch (pollErr) {
-                        console.error("Polling Network Error:", pollErr);
-                        // Do not clear interval immediately on a single network blip
-                    }
-                }, 3000); // 3000ms protects your Upstash 10k daily limit!
-
-            } catch (err) {
-                alert('Connection Error: ' + err.message);
+            setTimeout(() => {
                 progressBox.style.display = 'none';
-                downloadBtn.disabled = false;
-            }
+            }, 4000);
         });
-    </script>
-</body>
+    </script></body>
 </html>
