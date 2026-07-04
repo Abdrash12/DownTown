@@ -1,5 +1,5 @@
 # Use the lightweight Python slim image to keep build sizes tiny
-FROM python:3.11-slim
+FROM python:3.14-slim
 
 # Prevents Python from writing pyc files to disc and keeps stdout unbuffered for clean logs
 ENV PYTHONDONTWRITEBYTECODE=1
